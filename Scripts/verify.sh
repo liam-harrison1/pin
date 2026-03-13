@@ -58,6 +58,7 @@ prepare_swift_environment() {
 
 say "Verify repo structure"
 require_file "AGENTS.md"
+require_file "README.md"
 require_file "deskpins-project-book-v2.md"
 require_file "Docs/product-spec.md"
 require_file "Docs/architecture.md"
