@@ -69,6 +69,14 @@ Owns:
 - invalidation state
 - pin, activate, observe, and unpin store operations
 
+### `Core/Pinning/`
+
+Owns:
+
+- pin-current-window orchestration
+- toggle-current-window orchestration
+- bridge logic between Accessibility readers and the pinned store
+
 ### `Core/Overlay/`
 
 Owns:

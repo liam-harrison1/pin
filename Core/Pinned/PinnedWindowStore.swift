@@ -133,6 +133,23 @@ public struct PinnedWindowStore: Sendable {
         PinnedWindowOrdering.sort(allWindows, mode: mode)
     }
 
+    public func matchingWindow(for reference: PinnedWindowReference) -> PinnedWindow? {
+        guard let id = matchingWindowID(for: reference) else {
+            return nil
+        }
+
+        return windowsByID[id]
+    }
+
+    @discardableResult
+    public mutating func unpin(reference: PinnedWindowReference) -> PinnedWindow? {
+        guard let id = matchingWindowID(for: reference) else {
+            return nil
+        }
+
+        return windowsByID.removeValue(forKey: id)
+    }
+
     private func matchingWindowID(for reference: PinnedWindowReference) -> UUID? {
         windowsByID.first { _, window in
             window.reference.likelyMatches(reference)
