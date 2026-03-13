@@ -15,6 +15,7 @@ struct DeskPinsPinningSmokeTests {
             try testToggleCatalogEntryUnpinsMatchingEntry()
             try testAttemptPinMapsMissingPermissionToRecoverableOutcome()
             try testAttemptToggleMapsMissingFocusedWindowToRecoverableOutcome()
+            try testReconcileInvalidatesPinnedWindowsMissingFromCatalog()
             print("DeskPinsPinning smoke tests passed")
         } catch {
             fputs("Pinning smoke test failure: \(error)\n", stderr)
@@ -136,6 +137,43 @@ struct DeskPinsPinningSmokeTests {
         let outcome = service.attemptToggleCurrentWindow(in: &store, at: Date(timeIntervalSince1970: 9_400))
         try expect(outcome == .noFocusedWindow, message: "attemptToggle should surface a missing focused window as a recoverable outcome")
         try expect(store.isEmpty, message: "attemptToggle should leave the store unchanged when no focused window is available")
+    }
+
+    private static func testReconcileInvalidatesPinnedWindowsMissingFromCatalog() throws {
+        let entry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 301,
+            ownerName: "Notes",
+            windowTitle: "Still Here",
+            windowNumber: 601,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 0, y: 0, width: 400, height: 300),
+            isOnScreen: true
+        )
+        let service = PinCatalogWindowService()
+        let reconciler = PinnedWindowCatalogReconciler()
+        var store = PinnedWindowStore()
+
+        _ = service.pin(entry: entry, in: &store, at: Date(timeIntervalSince1970: 9_500))
+        _ = store.pin(
+            reference: PinnedWindowReference(
+                ownerPID: 302,
+                windowTitle: "Gone",
+                windowNumber: 602
+            ),
+            at: Date(timeIntervalSince1970: 9_510)
+        )
+
+        let invalidated = reconciler.reconcile(
+            store: &store,
+            against: WindowCatalog(entries: [entry]),
+            at: Date(timeIntervalSince1970: 9_600)
+        )
+
+        try expect(invalidated.count == 1, message: "reconcile should invalidate pinned windows missing from the refreshed catalog")
+        try expect(invalidated.first?.windowTitle == "Gone", message: "reconcile should invalidate the missing pinned window")
+        try expect(store.orderedWindows(mode: .recentPinFirst).first(where: { $0.windowTitle == "Gone" })?.invalidation?.reason == .noLongerMatched, message: "reconcile should record the noLongerMatched invalidation reason")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, message: String) throws {
