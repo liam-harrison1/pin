@@ -2,6 +2,7 @@ import Foundation
 import DeskPinsAccessibility
 import DeskPinsPinning
 import DeskPinsPinned
+import DeskPinsWindowCatalog
 
 @main
 struct DeskPinsPinningSmokeTests {
@@ -10,6 +11,8 @@ struct DeskPinsPinningSmokeTests {
             try testPinCurrentWindowCreatesPinnedEntry()
             try testToggleCurrentWindowUnpinsMatchingEntry()
             try testUnpinCurrentWindowReturnsNilWhenNotPinned()
+            try testPinCatalogEntryCreatesPinnedEntry()
+            try testToggleCatalogEntryUnpinsMatchingEntry()
             print("DeskPinsPinning smoke tests passed")
         } catch {
             fputs("Pinning smoke test failure: \(error)\n", stderr)
@@ -64,6 +67,55 @@ struct DeskPinsPinningSmokeTests {
 
         let removed = try service.unpinCurrentWindow(from: &store)
         try expect(removed == nil, message: "unpin current window should return nil when no matching pinned entry exists")
+    }
+
+    private static func testPinCatalogEntryCreatesPinnedEntry() throws {
+        let entry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 201,
+            ownerName: "Notes",
+            windowTitle: "Roadmap",
+            windowNumber: 401,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 10, y: 20, width: 300, height: 200),
+            isOnScreen: true
+        )
+        let service = PinCatalogWindowService()
+        var store = PinnedWindowStore()
+
+        let pinned = service.pin(entry: entry, in: &store, at: Date(timeIntervalSince1970: 9_000))
+
+        try expect(store.count == 1, message: "pin catalog entry should add one pinned entry")
+        try expect(pinned.windowNumber == 401, message: "pin catalog entry should preserve the source window number")
+        try expect(pinned.windowTitle == "Roadmap", message: "pin catalog entry should preserve the source title")
+    }
+
+    private static func testToggleCatalogEntryUnpinsMatchingEntry() throws {
+        let entry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 202,
+            ownerName: "Safari",
+            windowTitle: "Spec",
+            windowNumber: 402,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 0, y: 0, width: 800, height: 600),
+            isOnScreen: true
+        )
+        let service = PinCatalogWindowService()
+        var store = PinnedWindowStore()
+
+        _ = service.pin(entry: entry, in: &store, at: Date(timeIntervalSince1970: 9_100))
+        let result = service.toggle(entry: entry, in: &store, at: Date(timeIntervalSince1970: 9_200))
+
+        switch result {
+        case .unpinned(let window):
+            try expect(window.windowNumber == 402, message: "toggle should return the matching catalog-backed pinned window when unpinning")
+            try expect(store.isEmpty, message: "toggle should remove the catalog-backed window when it was already pinned")
+        case .pinned:
+            throw SmokeTestFailure(message: "toggle should unpin an already pinned catalog entry")
+        }
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, message: String) throws {

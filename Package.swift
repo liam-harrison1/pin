@@ -43,7 +43,7 @@ let package = Package(
         ),
         .target(
             name: "DeskPinsPinning",
-            dependencies: ["DeskPinsAccessibility", "DeskPinsPinned"],
+            dependencies: ["DeskPinsAccessibility", "DeskPinsPinned", "DeskPinsWindowCatalog"],
             path: "Core/Pinning"
         ),
         .executableTarget(
@@ -63,7 +63,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "DeskPinsPinningSmokeTests",
-            dependencies: ["DeskPinsPinning", "DeskPinsPinned"],
+            dependencies: ["DeskPinsPinning", "DeskPinsPinned", "DeskPinsWindowCatalog"],
             path: "Tools/DeskPinsPinningSmokeTests"
         )
     ]
