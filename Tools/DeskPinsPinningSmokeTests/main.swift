@@ -13,6 +13,8 @@ struct DeskPinsPinningSmokeTests {
             try testUnpinCurrentWindowReturnsNilWhenNotPinned()
             try testPinCatalogEntryCreatesPinnedEntry()
             try testToggleCatalogEntryUnpinsMatchingEntry()
+            try testAttemptPinMapsMissingPermissionToRecoverableOutcome()
+            try testAttemptToggleMapsMissingFocusedWindowToRecoverableOutcome()
             print("DeskPinsPinning smoke tests passed")
         } catch {
             fputs("Pinning smoke test failure: \(error)\n", stderr)
@@ -118,6 +120,24 @@ struct DeskPinsPinningSmokeTests {
         }
     }
 
+    private static func testAttemptPinMapsMissingPermissionToRecoverableOutcome() throws {
+        let service = PinCurrentWindowService(reader: ThrowingFocusedWindowReader(error: .accessibilityNotTrusted))
+        var store = PinnedWindowStore()
+
+        let outcome = service.attemptPinCurrentWindow(in: &store, at: Date(timeIntervalSince1970: 9_300))
+        try expect(outcome == .requiresAccessibilityPermission, message: "attemptPin should surface missing accessibility permission as a recoverable outcome")
+        try expect(store.isEmpty, message: "attemptPin should not mutate the store when permission is missing")
+    }
+
+    private static func testAttemptToggleMapsMissingFocusedWindowToRecoverableOutcome() throws {
+        let service = PinCurrentWindowService(reader: ThrowingFocusedWindowReader(error: .noFocusedWindow))
+        var store = PinnedWindowStore()
+
+        let outcome = service.attemptToggleCurrentWindow(in: &store, at: Date(timeIntervalSince1970: 9_400))
+        try expect(outcome == .noFocusedWindow, message: "attemptToggle should surface a missing focused window as a recoverable outcome")
+        try expect(store.isEmpty, message: "attemptToggle should leave the store unchanged when no focused window is available")
+    }
+
     private static func expect(_ condition: @autoclosure () -> Bool, message: String) throws {
         if condition() {
             return
@@ -132,5 +152,13 @@ private struct SmokeTestFailure: Error, CustomStringConvertible {
 
     var description: String {
         message
+    }
+}
+
+private struct ThrowingFocusedWindowReader: FocusedWindowReading {
+    let error: FocusedWindowReadError
+
+    func currentFocusedWindow() throws -> FocusedWindowSnapshot {
+        throw error
     }
 }
