@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import DeskPinsPinned
 import DeskPinsWindowCatalog
 
@@ -10,6 +11,8 @@ struct DeskPinsWindowCatalogSmokeTests {
             try testSearchPrioritizesWindowTitleMatches()
             try testTopmostEntryUsesFrontToBackOrdering()
             try testPinnedReferencePreservesWeakIdentityFields()
+            try testParserBuildsEntryFromCoreGraphicsStyleDictionary()
+            try testStaticReaderReturnsConfiguredCatalog()
             print("DeskPinsWindowCatalog smoke tests passed")
         } catch {
             fputs("Window catalog smoke test failure: \(error)\n", stderr)
@@ -137,6 +140,49 @@ struct DeskPinsWindowCatalogSmokeTests {
         try expect(reference.windowNumber == 77, message: "pinned reference should preserve window number when available")
         try expect(reference.windowTitle == "Sprint Plan", message: "pinned reference should preserve effective title")
         try expect(reference.bounds == PinnedWindowBounds(x: 1, y: 2, width: 300, height: 200), message: "pinned reference should preserve bounds snapshot")
+    }
+
+    private static func testParserBuildsEntryFromCoreGraphicsStyleDictionary() throws {
+        let rawEntry: [String: Any] = [
+            kCGWindowOwnerPID as String: 50,
+            kCGWindowOwnerName as String: "Terminal",
+            kCGWindowName as String: "Logs",
+            kCGWindowNumber as String: 88,
+            kCGWindowLayer as String: 0,
+            kCGWindowAlpha as String: 1,
+            kCGWindowIsOnscreen as String: true,
+            kCGWindowBounds as String: [
+                "X": 10,
+                "Y": 20,
+                "Width": 700,
+                "Height": 500
+            ]
+        ]
+
+        let entry = try WindowCatalogEntryParser.parse(rawEntry, frontToBackIndex: 3)
+        try expect(entry.ownerPID == 50, message: "parser should preserve owner PID")
+        try expect(entry.windowNumber == 88, message: "parser should preserve window number")
+        try expect(entry.bounds == WindowCatalogBounds(x: 10, y: 20, width: 700, height: 500), message: "parser should decode CoreGraphics-style bounds dictionaries")
+    }
+
+    private static func testStaticReaderReturnsConfiguredCatalog() throws {
+        let catalog = WindowCatalog(entries: [
+            WindowCatalogEntry(
+                frontToBackIndex: 0,
+                ownerPID: 60,
+                ownerName: "Notes",
+                windowTitle: "Backlog",
+                windowNumber: 90,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 0, y: 0, width: 100, height: 100),
+                isOnScreen: true
+            )
+        ])
+        let reader = StaticWindowCatalogReader(catalog: catalog)
+
+        let readCatalog = try reader.currentWindowCatalog()
+        try expect(readCatalog.entries == catalog.entries, message: "static window catalog reader should return the configured catalog")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, message: String) throws {

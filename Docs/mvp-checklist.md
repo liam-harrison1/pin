@@ -42,7 +42,7 @@
 
 ## Phase 4: Window List and Search
 
-- [ ] Enumerate visible windows with `CGWindowListCopyWindowInfo`.
+- [x] Enumerate visible windows with `CGWindowListCopyWindowInfo`.
 - [ ] Filter obvious noise windows.
 - [ ] Build searchable app name and title views.
 - [ ] Allow pinning from the window list.

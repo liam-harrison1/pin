@@ -54,6 +54,7 @@ Owns:
 Owns:
 
 - visible window enumeration
+- CoreGraphics dictionary parsing for live window list snapshots
 - filtering out noise windows
 - searchable window list model
 - weak matching between CGWindow data and pinned records
