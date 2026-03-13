@@ -28,9 +28,10 @@
 
 - [x] Read the current focused window through Accessibility.
 - [x] Create the pinned model and storage layer.
-- [ ] Implement pin for the current focused window.
-- [ ] Implement unpin for the current focused window.
-- [ ] Handle invalid or missing focused window states gracefully.
+- [x] Implement pin for the current focused window.
+- [x] Implement unpin for the current focused window.
+- [x] Handle invalid or missing focused window states gracefully.
+- [x] Build a refresh coordinator that combines focused-window state, visible-window catalog data, and pinned-window reconciliation.
 
 ## Phase 3: Overlay and Ordering
 
@@ -43,9 +44,9 @@
 ## Phase 4: Window List and Search
 
 - [x] Enumerate visible windows with `CGWindowListCopyWindowInfo`.
-- [ ] Filter obvious noise windows.
-- [ ] Build searchable app name and title views.
-- [ ] Allow pinning from the window list.
+- [x] Filter obvious noise windows.
+- [x] Build searchable app name and title views.
+- [x] Allow pinning from the window list.
 - [x] Handle stale window entries cleanly.
 
 ## Phase 5: Stability and Release Readiness

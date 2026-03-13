@@ -78,6 +78,7 @@ Owns:
 - toggle-current-window orchestration
 - bridge logic between Accessibility readers and the pinned store
 - reconciliation between refreshed window catalogs and pinned-window invalidation state
+- workspace-level refresh coordination that combines catalog snapshots, focused-window state, and pinned-window visibility
 
 ### `Core/Overlay/`
 

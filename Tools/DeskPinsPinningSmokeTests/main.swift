@@ -16,6 +16,8 @@ struct DeskPinsPinningSmokeTests {
             try testAttemptPinMapsMissingPermissionToRecoverableOutcome()
             try testAttemptToggleMapsMissingFocusedWindowToRecoverableOutcome()
             try testReconcileInvalidatesPinnedWindowsMissingFromCatalog()
+            try testWorkspaceRefreshBuildsFocusedSnapshotAndPinnedMatch()
+            try testWorkspaceRefreshMapsMissingPermissionWithoutDroppingCatalog()
             print("DeskPinsPinning smoke tests passed")
         } catch {
             fputs("Pinning smoke test failure: \(error)\n", stderr)
@@ -174,6 +176,107 @@ struct DeskPinsPinningSmokeTests {
         try expect(invalidated.count == 1, message: "reconcile should invalidate pinned windows missing from the refreshed catalog")
         try expect(invalidated.first?.windowTitle == "Gone", message: "reconcile should invalidate the missing pinned window")
         try expect(store.orderedWindows(mode: .recentPinFirst).first(where: { $0.windowTitle == "Gone" })?.invalidation?.reason == .noLongerMatched, message: "reconcile should record the noLongerMatched invalidation reason")
+    }
+
+    private static func testWorkspaceRefreshBuildsFocusedSnapshotAndPinnedMatch() throws {
+        let focusedEntry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 401,
+            ownerName: "Notes",
+            windowTitle: "Sprint Plan",
+            windowNumber: 701,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 12, y: 24, width: 500, height: 320),
+            isOnScreen: true
+        )
+        let backgroundEntry = WindowCatalogEntry(
+            frontToBackIndex: 1,
+            ownerPID: 402,
+            ownerName: "Terminal",
+            windowTitle: "Logs",
+            windowNumber: 702,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 80, y: 120, width: 640, height: 480),
+            isOnScreen: true
+        )
+        let coordinator = PinningWorkspaceCoordinator(
+            catalogReader: StaticWindowCatalogReader(
+                catalog: WindowCatalog(entries: [focusedEntry, backgroundEntry])
+            ),
+            focusedWindowReader: StaticFocusedWindowReader(
+                snapshot: FocusedWindowSnapshot(
+                    ownerPID: 401,
+                    applicationName: "Notes",
+                    windowTitle: "Sprint Plan",
+                    bounds: focusedEntry.asPinnedReference().bounds
+                )
+            )
+        )
+        var store = PinnedWindowStore(
+            windows: [
+                PinnedWindow(
+                    reference: focusedEntry.asPinnedReference(),
+                    lastPinnedAt: Date(timeIntervalSince1970: 10_000)
+                )
+            ]
+        )
+
+        let snapshot = try coordinator.refresh(
+            store: &store,
+            at: Date(timeIntervalSince1970: 10_100)
+        )
+
+        try expect(snapshot.focusStatus == .available, message: "workspace refresh should report an available focus state when the focused window is readable")
+        try expect(snapshot.visibleEntries.count == 2, message: "workspace refresh should retain the filtered catalog entries")
+        try expect(snapshot.focusedEntry?.windowNumber == 701, message: "workspace refresh should match the focused window back to the visible catalog entry")
+        try expect(snapshot.focusedPinnedWindow?.windowNumber == 701, message: "workspace refresh should surface the pinned window that matches the focused snapshot")
+        try expect(snapshot.invalidatedPinnedWindows.isEmpty, message: "workspace refresh should not invalidate pinned windows that are still present in the catalog")
+    }
+
+    private static func testWorkspaceRefreshMapsMissingPermissionWithoutDroppingCatalog() throws {
+        let visibleEntry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 501,
+            ownerName: "Safari",
+            windowTitle: "DeskPins Spec",
+            windowNumber: 801,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 0, y: 0, width: 900, height: 700),
+            isOnScreen: true
+        )
+        let missingEntryReference = PinnedWindowReference(
+            ownerPID: 999,
+            windowTitle: "Missing",
+            windowNumber: 899
+        )
+        let coordinator = PinningWorkspaceCoordinator(
+            catalogReader: StaticWindowCatalogReader(
+                catalog: WindowCatalog(entries: [visibleEntry])
+            ),
+            focusedWindowReader: ThrowingFocusedWindowReader(error: .accessibilityNotTrusted)
+        )
+        var store = PinnedWindowStore(
+            windows: [
+                PinnedWindow(
+                    reference: missingEntryReference,
+                    lastPinnedAt: Date(timeIntervalSince1970: 10_200)
+                )
+            ]
+        )
+
+        let snapshot = try coordinator.refresh(
+            store: &store,
+            at: Date(timeIntervalSince1970: 10_300)
+        )
+
+        try expect(snapshot.focusStatus == .requiresAccessibilityPermission, message: "workspace refresh should surface missing accessibility permission as a recoverable focus state")
+        try expect(snapshot.focusedWindow == nil, message: "workspace refresh should not return a focused snapshot when permission is missing")
+        try expect(snapshot.visibleEntries.count == 1, message: "workspace refresh should still return the catalog when focused-window access is unavailable")
+        try expect(snapshot.invalidatedPinnedWindows.count == 1, message: "workspace refresh should still reconcile pinned windows against the current catalog")
+        try expect(snapshot.invalidatedPinnedWindows.first?.invalidation?.reason == .noLongerMatched, message: "workspace refresh should carry through stale-window invalidation results")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, message: String) throws {
