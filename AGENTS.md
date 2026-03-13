@@ -47,6 +47,7 @@ Do not:
 - `Core/Accessibility/` owns Accessibility access and observation.
 - `Core/WindowCatalog/` owns visible window discovery and search.
 - `Core/Pinned/` owns pin state, identity, and ordering.
+- `Core/Pinning/` owns current-window pinning workflows.
 - `Core/Overlay/` owns pin badge, borders, and overlay behavior.
 - `Core/HotKey/` owns global shortcut behavior.
 - `Scripts/` contains simple helper scripts only.

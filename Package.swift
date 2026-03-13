@@ -12,9 +12,11 @@ let package = Package(
         .library(name: "DeskPinsOverlay", targets: ["DeskPinsOverlay"]),
         .library(name: "DeskPinsPinned", targets: ["DeskPinsPinned"]),
         .library(name: "DeskPinsHotKey", targets: ["DeskPinsHotKey"]),
+        .library(name: "DeskPinsPinning", targets: ["DeskPinsPinning"]),
         .executable(name: "DeskPinsPinnedSmokeTests", targets: ["DeskPinsPinnedSmokeTests"]),
         .executable(name: "DeskPinsWindowCatalogSmokeTests", targets: ["DeskPinsWindowCatalogSmokeTests"]),
-        .executable(name: "DeskPinsAccessibilitySmokeTests", targets: ["DeskPinsAccessibilitySmokeTests"])
+        .executable(name: "DeskPinsAccessibilitySmokeTests", targets: ["DeskPinsAccessibilitySmokeTests"]),
+        .executable(name: "DeskPinsPinningSmokeTests", targets: ["DeskPinsPinningSmokeTests"])
     ],
     targets: [
         .target(
@@ -39,6 +41,11 @@ let package = Package(
             name: "DeskPinsHotKey",
             path: "Core/HotKey"
         ),
+        .target(
+            name: "DeskPinsPinning",
+            dependencies: ["DeskPinsAccessibility", "DeskPinsPinned"],
+            path: "Core/Pinning"
+        ),
         .executableTarget(
             name: "DeskPinsPinnedSmokeTests",
             dependencies: ["DeskPinsPinned"],
@@ -53,6 +60,11 @@ let package = Package(
             name: "DeskPinsAccessibilitySmokeTests",
             dependencies: ["DeskPinsAccessibility", "DeskPinsPinned"],
             path: "Tools/DeskPinsAccessibilitySmokeTests"
+        ),
+        .executableTarget(
+            name: "DeskPinsPinningSmokeTests",
+            dependencies: ["DeskPinsPinning", "DeskPinsPinned"],
+            path: "Tools/DeskPinsPinningSmokeTests"
         )
     ]
 )
