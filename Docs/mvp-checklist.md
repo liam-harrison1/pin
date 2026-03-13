@@ -46,7 +46,7 @@
 - [ ] Filter obvious noise windows.
 - [ ] Build searchable app name and title views.
 - [ ] Allow pinning from the window list.
-- [ ] Handle stale window entries cleanly.
+- [x] Handle stale window entries cleanly.
 
 ## Phase 5: Stability and Release Readiness
 
