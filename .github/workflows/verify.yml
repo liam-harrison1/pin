@@ -1,0 +1,21 @@
+name: Verify
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - 'codex/**'
+
+jobs:
+  verify:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run repository verification
+        run: ./Scripts/verify.sh
