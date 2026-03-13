@@ -1,0 +1,8 @@
+repos:
+  - repo: local
+    hooks:
+      - id: deskpins-verify
+        name: deskpins verify
+        entry: ./Scripts/verify.sh
+        language: system
+        pass_filenames: false
