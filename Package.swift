@@ -7,18 +7,36 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "DeskPinsAppSupport", targets: ["DeskPinsAppSupport"]),
         .library(name: "DeskPinsAccessibility", targets: ["DeskPinsAccessibility"]),
         .library(name: "DeskPinsWindowCatalog", targets: ["DeskPinsWindowCatalog"]),
         .library(name: "DeskPinsOverlay", targets: ["DeskPinsOverlay"]),
         .library(name: "DeskPinsPinned", targets: ["DeskPinsPinned"]),
         .library(name: "DeskPinsHotKey", targets: ["DeskPinsHotKey"]),
         .library(name: "DeskPinsPinning", targets: ["DeskPinsPinning"]),
+        .executable(name: "DeskPinsMenuBarApp", targets: ["DeskPinsMenuBarApp"]),
+        .executable(name: "DeskPinsAppSupportSmokeTests", targets: ["DeskPinsAppSupportSmokeTests"]),
         .executable(name: "DeskPinsPinnedSmokeTests", targets: ["DeskPinsPinnedSmokeTests"]),
+        .executable(
+            name: "DeskPinsPinnedPersistenceSmokeTests",
+            targets: ["DeskPinsPinnedPersistenceSmokeTests"]
+        ),
         .executable(name: "DeskPinsWindowCatalogSmokeTests", targets: ["DeskPinsWindowCatalogSmokeTests"]),
         .executable(name: "DeskPinsAccessibilitySmokeTests", targets: ["DeskPinsAccessibilitySmokeTests"]),
         .executable(name: "DeskPinsPinningSmokeTests", targets: ["DeskPinsPinningSmokeTests"])
     ],
     targets: [
+        .target(
+            name: "DeskPinsAppSupport",
+            dependencies: [
+                "DeskPinsAccessibility",
+                "DeskPinsOverlay",
+                "DeskPinsPinning",
+                "DeskPinsPinned",
+                "DeskPinsWindowCatalog"
+            ],
+            path: "App/Support"
+        ),
         .target(
             name: "DeskPinsAccessibility",
             dependencies: ["DeskPinsPinned"],
@@ -31,6 +49,7 @@ let package = Package(
         ),
         .target(
             name: "DeskPinsOverlay",
+            dependencies: ["DeskPinsPinned"],
             path: "Core/Overlay"
         ),
         .target(
@@ -47,9 +66,24 @@ let package = Package(
             path: "Core/Pinning"
         ),
         .executableTarget(
+            name: "DeskPinsMenuBarApp",
+            dependencies: ["DeskPinsAppSupport", "DeskPinsHotKey"],
+            path: "App/MenuBarApp"
+        ),
+        .executableTarget(
+            name: "DeskPinsAppSupportSmokeTests",
+            dependencies: ["DeskPinsAppSupport"],
+            path: "Tools/DeskPinsAppSupportSmokeTests"
+        ),
+        .executableTarget(
             name: "DeskPinsPinnedSmokeTests",
             dependencies: ["DeskPinsPinned"],
             path: "Tools/DeskPinsPinnedSmokeTests"
+        ),
+        .executableTarget(
+            name: "DeskPinsPinnedPersistenceSmokeTests",
+            dependencies: ["DeskPinsPinned"],
+            path: "Tools/DeskPinsPinnedPersistenceSmokeTests"
         ),
         .executableTarget(
             name: "DeskPinsWindowCatalogSmokeTests",

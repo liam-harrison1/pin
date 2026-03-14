@@ -100,10 +100,22 @@ struct DeskPinsPinnedSmokeTests {
         let firstPin = store.pin(reference: reference, at: baseDate)
         let secondPin = store.pin(reference: reference, at: baseDate.addingTimeInterval(30))
 
-        try expect(store.count == 1, message: "pinning the same logical window should not duplicate entries")
-        try expect(firstPin.id == secondPin.id, message: "pinning the same logical window should preserve the original pinned id")
-        try expect(secondPin.lastPinnedAt == baseDate.addingTimeInterval(30), message: "repinning should refresh pin time")
-        try expect(secondPin.invalidation == nil, message: "repinning should clear invalidation state")
+        try expect(
+            store.count == 1,
+            message: "pinning the same logical window should not duplicate entries"
+        )
+        try expect(
+            firstPin.id == secondPin.id,
+            message: "pinning the same logical window should preserve the original pinned id"
+        )
+        try expect(
+            secondPin.lastPinnedAt == baseDate.addingTimeInterval(30),
+            message: "repinning should refresh pin time"
+        )
+        try expect(
+            secondPin.invalidation == nil,
+            message: "repinning should clear invalidation state"
+        )
     }
 
     private static func testActivationReordersStoreResults() throws {
@@ -121,7 +133,10 @@ struct DeskPinsPinnedSmokeTests {
         _ = store.markActivated(id: first.id, at: baseDate.addingTimeInterval(50))
 
         let ordered = store.orderedWindows(mode: .recentInteractionFirst)
-        try expect(ordered.map(\.id) == [first.id, second.id], message: "activating a pinned window should move it to the front in interaction ordering")
+        try expect(
+            ordered.map(\.id) == [first.id, second.id],
+            message: "activating a pinned window should move it to the front in interaction ordering"
+        )
     }
 
     private static func testInvalidationAndUnpinLifecycle() throws {
@@ -137,11 +152,20 @@ struct DeskPinsPinnedSmokeTests {
             reason: .windowClosed,
             at: baseDate.addingTimeInterval(10)
         )
-        try expect(invalidated?.isInvalidated == true, message: "invalidating a pinned window should retain it with invalidation metadata")
+        try expect(
+            invalidated?.isInvalidated == true,
+            message: "invalidating a pinned window should retain it with invalidation metadata"
+        )
 
         let removed = store.unpin(id: pinned.id)
-        try expect(removed?.id == pinned.id, message: "unpin should remove and return the pinned window")
-        try expect(store.isEmpty, message: "store should be empty after removing the only pinned window")
+        try expect(
+            removed?.id == pinned.id,
+            message: "unpin should remove and return the pinned window"
+        )
+        try expect(
+            store.isEmpty,
+            message: "store should be empty after removing the only pinned window"
+        )
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, message: String) throws {

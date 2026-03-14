@@ -16,6 +16,7 @@ struct DeskPinsPinningSmokeTests {
             try testAttemptPinMapsMissingPermissionToRecoverableOutcome()
             try testAttemptToggleMapsMissingFocusedWindowToRecoverableOutcome()
             try testReconcileInvalidatesPinnedWindowsMissingFromCatalog()
+            try testReconcileReconnectsWhenWindowNumberChanges()
             try testWorkspaceRefreshBuildsFocusedSnapshotAndPinnedMatch()
             try testWorkspaceRefreshMapsMissingPermissionWithoutDroppingCatalog()
             print("DeskPinsPinning smoke tests passed")
@@ -54,8 +55,14 @@ struct DeskPinsPinningSmokeTests {
 
         switch result {
         case .unpinned(let window):
-            try expect(window.windowTitle == "Logs", message: "toggle should return the unpinned current window when it was already pinned")
-            try expect(store.isEmpty, message: "toggle should remove the current window when it was already pinned")
+            try expect(
+                window.windowTitle == "Logs",
+                message: "toggle should return the unpinned current window when it was already pinned"
+            )
+            try expect(
+                store.isEmpty,
+                message: "toggle should remove the current window when it was already pinned"
+            )
         case .pinned:
             throw SmokeTestFailure(message: "toggle should unpin an already pinned current window")
         }
@@ -128,8 +135,14 @@ struct DeskPinsPinningSmokeTests {
         var store = PinnedWindowStore()
 
         let outcome = service.attemptPinCurrentWindow(in: &store, at: Date(timeIntervalSince1970: 9_300))
-        try expect(outcome == .requiresAccessibilityPermission, message: "attemptPin should surface missing accessibility permission as a recoverable outcome")
-        try expect(store.isEmpty, message: "attemptPin should not mutate the store when permission is missing")
+        try expect(
+            outcome == .requiresAccessibilityPermission,
+            message: "attemptPin should surface missing accessibility permission as a recoverable outcome"
+        )
+        try expect(
+            store.isEmpty,
+            message: "attemptPin should not mutate the store when permission is missing"
+        )
     }
 
     private static func testAttemptToggleMapsMissingFocusedWindowToRecoverableOutcome() throws {
@@ -137,8 +150,14 @@ struct DeskPinsPinningSmokeTests {
         var store = PinnedWindowStore()
 
         let outcome = service.attemptToggleCurrentWindow(in: &store, at: Date(timeIntervalSince1970: 9_400))
-        try expect(outcome == .noFocusedWindow, message: "attemptToggle should surface a missing focused window as a recoverable outcome")
-        try expect(store.isEmpty, message: "attemptToggle should leave the store unchanged when no focused window is available")
+        try expect(
+            outcome == .noFocusedWindow,
+            message: "attemptToggle should surface a missing focused window as a recoverable outcome"
+        )
+        try expect(
+            store.isEmpty,
+            message: "attemptToggle should leave the store unchanged when no focused window is available"
+        )
     }
 
     private static func testReconcileInvalidatesPinnedWindowsMissingFromCatalog() throws {
@@ -173,9 +192,66 @@ struct DeskPinsPinningSmokeTests {
             at: Date(timeIntervalSince1970: 9_600)
         )
 
-        try expect(invalidated.count == 1, message: "reconcile should invalidate pinned windows missing from the refreshed catalog")
-        try expect(invalidated.first?.windowTitle == "Gone", message: "reconcile should invalidate the missing pinned window")
-        try expect(store.orderedWindows(mode: .recentPinFirst).first(where: { $0.windowTitle == "Gone" })?.invalidation?.reason == .noLongerMatched, message: "reconcile should record the noLongerMatched invalidation reason")
+        try expect(
+            invalidated.count == 1,
+            message: "reconcile should invalidate pinned windows missing from the refreshed catalog"
+        )
+        try expect(
+            invalidated.first?.windowTitle == "Gone",
+            message: "reconcile should invalidate the missing pinned window"
+        )
+        let invalidatedReason = store
+            .orderedWindows(mode: .recentPinFirst)
+            .first(where: { $0.windowTitle == "Gone" })?
+            .invalidation?.reason
+        try expect(
+            invalidatedReason == .noLongerMatched,
+            message: "reconcile should record the noLongerMatched invalidation reason"
+        )
+    }
+
+    private static func testReconcileReconnectsWhenWindowNumberChanges() throws {
+        let pinnedWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 350,
+                windowTitle: "Notes",
+                windowNumber: 910,
+                bounds: PinnedWindowBounds(x: 120, y: 140, width: 900, height: 620)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 9_700)
+        )
+        var store = PinnedWindowStore(windows: [pinnedWindow])
+        let replacementEntry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 350,
+            ownerName: "Notes",
+            windowTitle: "Notes",
+            windowNumber: 911,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 132, y: 146, width: 892, height: 618),
+            isOnScreen: true
+        )
+
+        let invalidated = PinnedWindowCatalogReconciler().reconcile(
+            store: &store,
+            against: WindowCatalog(entries: [replacementEntry]),
+            at: Date(timeIntervalSince1970: 9_750)
+        )
+
+        let reconnectedWindow = store.window(id: pinnedWindow.id)
+        try expect(
+            invalidated.isEmpty,
+            message: "reconcile should avoid stale invalidation when a moved window can still be weak-matched"
+        )
+        try expect(
+            reconnectedWindow?.windowNumber == 911,
+            message: "reconcile should refresh pinned reference identity when the source window number changes"
+        )
+        try expect(
+            reconnectedWindow?.isInvalidated == false,
+            message: "reconcile should clear stale state after reconnecting a pinned window"
+        )
     }
 
     private static func testWorkspaceRefreshBuildsFocusedSnapshotAndPinnedMatch() throws {
@@ -228,11 +304,26 @@ struct DeskPinsPinningSmokeTests {
             at: Date(timeIntervalSince1970: 10_100)
         )
 
-        try expect(snapshot.focusStatus == .available, message: "workspace refresh should report an available focus state when the focused window is readable")
-        try expect(snapshot.visibleEntries.count == 2, message: "workspace refresh should retain the filtered catalog entries")
-        try expect(snapshot.focusedEntry?.windowNumber == 701, message: "workspace refresh should match the focused window back to the visible catalog entry")
-        try expect(snapshot.focusedPinnedWindow?.windowNumber == 701, message: "workspace refresh should surface the pinned window that matches the focused snapshot")
-        try expect(snapshot.invalidatedPinnedWindows.isEmpty, message: "workspace refresh should not invalidate pinned windows that are still present in the catalog")
+        try expect(
+            snapshot.focusStatus == .available,
+            message: "workspace refresh should report an available focus state when the focused window is readable"
+        )
+        try expect(
+            snapshot.visibleEntries.count == 2,
+            message: "workspace refresh should retain the filtered catalog entries"
+        )
+        try expect(
+            snapshot.focusedEntry?.windowNumber == 701,
+            message: "workspace refresh should match the focused window back to the visible catalog entry"
+        )
+        try expect(
+            snapshot.focusedPinnedWindow?.windowNumber == 701,
+            message: "workspace refresh should surface the pinned window that matches the focused snapshot"
+        )
+        try expect(
+            snapshot.invalidatedPinnedWindows.isEmpty,
+            message: "workspace refresh should not invalidate pinned windows that are still present in the catalog"
+        )
     }
 
     private static func testWorkspaceRefreshMapsMissingPermissionWithoutDroppingCatalog() throws {
@@ -272,11 +363,26 @@ struct DeskPinsPinningSmokeTests {
             at: Date(timeIntervalSince1970: 10_300)
         )
 
-        try expect(snapshot.focusStatus == .requiresAccessibilityPermission, message: "workspace refresh should surface missing accessibility permission as a recoverable focus state")
-        try expect(snapshot.focusedWindow == nil, message: "workspace refresh should not return a focused snapshot when permission is missing")
-        try expect(snapshot.visibleEntries.count == 1, message: "workspace refresh should still return the catalog when focused-window access is unavailable")
-        try expect(snapshot.invalidatedPinnedWindows.count == 1, message: "workspace refresh should still reconcile pinned windows against the current catalog")
-        try expect(snapshot.invalidatedPinnedWindows.first?.invalidation?.reason == .noLongerMatched, message: "workspace refresh should carry through stale-window invalidation results")
+        try expect(
+            snapshot.focusStatus == .requiresAccessibilityPermission,
+            message: "workspace refresh should surface missing accessibility permission as a recoverable focus state"
+        )
+        try expect(
+            snapshot.focusedWindow == nil,
+            message: "workspace refresh should not return a focused snapshot when permission is missing"
+        )
+        try expect(
+            snapshot.visibleEntries.count == 1,
+            message: "workspace refresh should still return the catalog when focused-window access is unavailable"
+        )
+        try expect(
+            snapshot.invalidatedPinnedWindows.count == 1,
+            message: "workspace refresh should still reconcile pinned windows against the current catalog"
+        )
+        try expect(
+            snapshot.invalidatedPinnedWindows.first?.invalidation?.reason == .noLongerMatched,
+            message: "workspace refresh should carry through stale-window invalidation results"
+        )
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, message: String) throws {

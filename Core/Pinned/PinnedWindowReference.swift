@@ -37,18 +37,57 @@ public struct PinnedWindowReference: Sendable, Equatable, Codable {
             return false
         }
 
-        if let windowNumber, let otherWindowNumber = other.windowNumber {
-            return windowNumber == otherWindowNumber
+        if matchingWindowNumbers(with: other) {
+            return true
         }
 
-        if windowTitle != other.windowTitle {
+        let normalizedTitle = Self.normalizedTitle(windowTitle)
+        let normalizedOtherTitle = Self.normalizedTitle(other.windowTitle)
+        let titleMatches = !normalizedTitle.isEmpty && normalizedTitle == normalizedOtherTitle
+        let boundsMatch = Self.approximatelyMatches(bounds, other.bounds)
+        let missingWindowNumber = windowNumber == nil || other.windowNumber == nil
+        let hasUntitledSide = normalizedTitle.isEmpty || normalizedOtherTitle.isEmpty
+
+        if titleMatches && boundsMatch {
+            return true
+        }
+
+        if titleMatches && missingWindowNumber {
+            return true
+        }
+
+        if boundsMatch && missingWindowNumber && hasUntitledSide {
+            return true
+        }
+
+        return false
+    }
+
+    private func matchingWindowNumbers(with other: PinnedWindowReference) -> Bool {
+        guard let windowNumber, let otherWindowNumber = other.windowNumber else {
             return false
         }
 
-        if let bounds, let otherBounds = other.bounds {
-            return bounds == otherBounds
+        return windowNumber == otherWindowNumber
+    }
+
+    private static func normalizedTitle(_ title: String) -> String {
+        title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    private static func approximatelyMatches(
+        _ leftBounds: PinnedWindowBounds?,
+        _ rightBounds: PinnedWindowBounds?
+    ) -> Bool {
+        guard let leftBounds, let rightBounds else {
+            return false
         }
 
-        return true
+        return abs(leftBounds.x - rightBounds.x) <= 40 &&
+            abs(leftBounds.y - rightBounds.y) <= 40 &&
+            abs(leftBounds.width - rightBounds.width) <= 80 &&
+            abs(leftBounds.height - rightBounds.height) <= 80
     }
 }

@@ -4,7 +4,7 @@
 
 Request the minimum permission required for the currently shipped feature set.
 
-## MVP Permission
+## Baseline MVP Permission
 
 ### Accessibility
 
@@ -20,13 +20,13 @@ What happens without it:
 - the app cannot perform real pin actions on external windows
 - the UI must explain the missing capability clearly
 
-## Deferred Permission
+## Experimental Content-Overlay Permission
 
 ### Screen Recording
 
-Do not request this in MVP.
+Request this only on the mirrored content-overlay branch or when the shipped feature set truly includes window mirroring.
 
-Only introduce it when the project explicitly adds:
+It becomes required when the project explicitly adds:
 
 - content preview
 - window mirroring

@@ -1,0 +1,22 @@
+cache_path: .swiftlint-cache
+
+excluded:
+  - .build
+
+identifier_name:
+  excluded:
+    - id
+    - x
+    - y
+
+function_body_length:
+  warning: 70
+  error: 120
+
+type_body_length:
+  warning: 320
+  error: 500
+
+line_length:
+  warning: 140
+  error: 200

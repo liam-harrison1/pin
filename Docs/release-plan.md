@@ -18,6 +18,7 @@ The first release is an independently distributed, signed, and notarized app can
 - Window list pinning works reliably.
 - Multiple pinned windows are manageable.
 - Ordering behavior is understandable.
+- If mirrored content overlay is shipped, Screen Recording permission and degraded fallback behavior are both clear.
 
 ### Technical Gates
 
@@ -39,10 +40,19 @@ The first release is an independently distributed, signed, and notarized app can
 
 ## Post-MVP Candidates
 
-- content preview
 - automation rules
 - App Intents
 - XCF-enhanced development workflow
+
+## Experimental Branch Note
+
+`codex/feat-screen-recording-overlay` is intentionally exploring a more DeskPins-like mirrored content overlay.
+
+It is not release-ready until the project confirms:
+
+- Screen Recording messaging is acceptable
+- mirrored overlays remain understandable and performant with multiple pinned windows
+- fallback behavior without Screen Recording remains non-destructive
 
 ## Repository Gates
 

@@ -36,10 +36,19 @@ The app should feel:
 - Pin/Unpin current focused window.
 - Searchable visible window list built from `CGWindowListCopyWindowInfo`.
 - Multiple pinned windows.
-- Pin badge or border overlay for pinned state.
+- Floating `📌` badge overlay near the pinned window title bar.
 - Global shortcut for pinning the current window.
 - Ordering rule based on recent interaction or recent pin time.
 - Graceful degradation for missing permissions and invalid windows.
+
+### Experimental Branch Scope
+
+On `codex/feat-screen-recording-overlay`, DeskPins also renders mirrored pinned-window content above other apps.
+
+This branch explicitly requires:
+
+- Accessibility
+- Screen Recording
 
 ### Out of Scope
 
@@ -94,12 +103,13 @@ Per pinned window, MVP should support:
 
 ## Permissions
 
-### Required in MVP
+### Required in Baseline MVP
 
 - Accessibility
 
-### Deferred
+### Required in Experimental Content-Overlay Mode
 
+- Accessibility
 - Screen Recording
 
 Rule:

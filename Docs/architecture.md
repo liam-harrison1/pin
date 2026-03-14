@@ -6,19 +6,24 @@ Adopt a public-API-first architecture:
 
 - Accessibility APIs for focused window access, attributes, and event observation.
 - `CGWindowListCopyWindowInfo` for visible window cataloging, filtering, and hit selection support.
-- App-owned overlay windows for pin badge, border, ordering, and visual state.
+- App-owned overlay windows for pin badge, ordering, visual state, and mirrored pinned-content previews.
+- `ScreenCaptureKit` for branch-specific mirrored content overlays when the project opts into Screen Recording.
 
 This architecture intentionally avoids private API window server manipulation.
 
 ## Current Bootstrap State
 
-The repository currently bootstraps through Swift Package Manager because full Xcode-backed macOS app builds are not available in the active local developer setup.
+The repository currently bootstraps through Swift Package Manager even though full Xcode is now available locally.
 
 That means:
 
 - core modules compile as SwiftPM targets
-- verification currently uses `swift build` plus a smoke-test executable
-- the menu bar app target will be added once full Xcode tooling is available
+- a minimal AppKit menu bar shell is available as a SwiftPM executable target
+- pinned windows now have app-owned overlay rendering and menu-triggered bring-forward actions
+- a Carbon-backed global hotkey can toggle the current focused window pin
+- the content-overlay branch can render mirrored pinned-window previews using `ScreenCaptureKit`
+- verification currently uses `swift build` plus smoke-test executables
+- a dedicated Xcode project can still be added later if the app shell outgrows package-only wiring
 
 ## Design Principles
 
@@ -35,6 +40,7 @@ Owns:
 
 - app startup
 - menu bar status item
+- app-support state orchestration for menu-driven actions
 - settings entry
 - lifecycle wiring
 
@@ -67,6 +73,7 @@ Owns:
 - weak window identity and bounds snapshots
 - sort order policy
 - persistence
+- persisted snapshot schema and JSON file storage
 - invalidation state
 - pin, activate, observe, and unpin store operations
 
@@ -85,7 +92,9 @@ Owns:
 Owns:
 
 - pin badge presentation
-- border and highlight overlays
+- floating pin-badge overlays that track pinned window bounds
+- mirrored pinned-content preview capture and rendering
+- Screen Recording permission checks for content overlays
 - opacity and click-through behavior
 - z-order application for app-owned overlays
 
@@ -168,13 +177,14 @@ Polling goals:
 
 ## Permission Model
 
-### MVP
+### Baseline Branch
 
 - Accessibility only
 
-### Later
+### Content-Overlay Branch
 
-- Screen Recording, but only when content preview becomes a real feature
+- Accessibility
+- Screen Recording, because mirrored pinned previews now depend on `ScreenCaptureKit`
 
 ## Operational Constraints
 

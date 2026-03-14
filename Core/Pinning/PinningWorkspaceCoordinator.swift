@@ -21,10 +21,31 @@ public struct PinningWorkspaceCoordinator<
         self.reconciler = reconciler
     }
 
+    public func captureFocus() -> PinningWorkspaceFocusCapture {
+        do {
+            let focusedWindow = try focusedWindowReader.currentFocusedWindow()
+            return PinningWorkspaceFocusCapture(
+                status: .available,
+                focusedWindow: focusedWindow
+            )
+        } catch let error as FocusedWindowReadError {
+            return PinningWorkspaceFocusCapture(
+                status: mapFocusStatus(error),
+                focusedWindow: nil
+            )
+        } catch {
+            return PinningWorkspaceFocusCapture(
+                status: .noFocusedWindow,
+                focusedWindow: nil
+            )
+        }
+    }
+
     public func refresh(
         store: inout PinnedWindowStore,
         filteringRules: WindowCatalogFilteringRules = .default,
         orderingMode: PinnedWindowOrderingMode = .recentInteractionFirst,
+        focusCapture: PinningWorkspaceFocusCapture? = nil,
         at refreshedAt: Date = .now
     ) throws -> PinningWorkspaceSnapshot {
         let catalog = try catalogReader.currentWindowCatalog()
@@ -36,7 +57,8 @@ public struct PinningWorkspaceCoordinator<
         )
         let focusResolution = resolveFocus(
             store: store,
-            visibleEntries: visibleEntries
+            visibleEntries: visibleEntries,
+            capture: focusCapture ?? captureFocus()
         )
 
         return PinningWorkspaceSnapshot(
@@ -54,39 +76,32 @@ public struct PinningWorkspaceCoordinator<
 
     private func resolveFocus(
         store: PinnedWindowStore,
-        visibleEntries: [WindowCatalogEntry]
+        visibleEntries: [WindowCatalogEntry],
+        capture: PinningWorkspaceFocusCapture
     ) -> FocusResolution {
-        do {
-            let focusedWindow = try focusedWindowReader.currentFocusedWindow()
-            let focusedEntry = matchingCatalogEntry(
-                for: focusedWindow,
-                in: visibleEntries
-            )
-            let focusedPinnedWindow = store.matchingWindow(
-                for: focusedWindow.asPinnedReference()
-            )
-
+        guard let focusedWindow = capture.focusedWindow else {
             return FocusResolution(
-                status: .available,
-                focusedWindow: focusedWindow,
-                focusedEntry: focusedEntry,
-                focusedPinnedWindow: focusedPinnedWindow
-            )
-        } catch let error as FocusedWindowReadError {
-            return FocusResolution(
-                status: mapFocusStatus(error),
-                focusedWindow: nil,
-                focusedEntry: nil,
-                focusedPinnedWindow: nil
-            )
-        } catch {
-            return FocusResolution(
-                status: .noFocusedWindow,
+                status: capture.status,
                 focusedWindow: nil,
                 focusedEntry: nil,
                 focusedPinnedWindow: nil
             )
         }
+
+        let focusedEntry = matchingCatalogEntry(
+            for: focusedWindow,
+            in: visibleEntries
+        )
+        let focusedPinnedWindow = store.matchingWindow(
+            for: focusedWindow.asPinnedReference()
+        )
+
+        return FocusResolution(
+            status: capture.status,
+            focusedWindow: focusedWindow,
+            focusedEntry: focusedEntry,
+            focusedPinnedWindow: focusedPinnedWindow
+        )
     }
 
     private func matchingCatalogEntry(

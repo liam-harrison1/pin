@@ -93,6 +93,7 @@ public struct PinnedWindowStore: Sendable {
             window.reference = reference
         }
 
+        window.invalidation = nil
         window.lastObservedAt = observedAt
         windowsByID[id] = window
         return window
