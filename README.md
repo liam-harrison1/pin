@@ -5,8 +5,9 @@ DeskPins is a macOS DeskPins-style window pinning project built around public sy
 The repository is currently in a bootstrap-but-runnable state:
 
 - core pinning, focused-window reading, and window-catalog logic compile with Swift Package Manager
+- a minimal AppKit menu bar shell can be launched from the package
 - repository verification, smoke tests, PR template, and CI scaffolding are in place
-- the final menu bar app target and overlay UI are not built yet
+- the final overlay UI and richer app-shell surfaces are not built yet
 
 ## Current Capabilities
 
@@ -20,23 +21,23 @@ This repository currently includes:
 - stale pinned-window reconciliation when a catalog refresh no longer matches an entry
 - a workspace coordinator that combines catalog state, focused-window state, and pinned-window state into a single refresh snapshot
 - JSON persistence for pinned-window store snapshots
+- a runnable menu bar app shell with refresh, permission request, and current-window pin toggle actions
 
 ## What Is Not Built Yet
 
 The current branch does not yet include:
 
-- a runnable menu bar app shell
 - overlay badges or border rendering
-- automatic app-shell restore wiring for persisted pinned windows
+- pinning from the menu-bar window list UI
 - global hotkey registration
-- a finished Xcode app target
+- a finished Xcode project target
 
 ## Requirements
 
 - macOS with Xcode Command Line Tools installed
 - Swift toolchain compatible with `swift-tools-version: 6.0`
 
-Full Xcode is optional for the current bootstrap phase. The repository can be verified with Command Line Tools alone.
+Full Xcode is now available on this machine, but the repository still builds and runs through Swift Package Manager.
 
 ## Quick Start
 
@@ -75,14 +76,41 @@ Expected result:
 
 ```bash
 swift run DeskPinsAccessibilitySmokeTests
+swift run DeskPinsAppSupportSmokeTests
 swift run DeskPinsPinnedSmokeTests
 swift run DeskPinsPinnedPersistenceSmokeTests
 swift run DeskPinsPinningSmokeTests
 swift run DeskPinsWindowCatalogSmokeTests
 ```
 
-### 3. Review the current implementation areas
+### 3. Launch the current menu bar shell
 
+```bash
+swift run DeskPinsMenuBarApp
+```
+
+What you should expect:
+
+- a `Pins` status item appears in the macOS menu bar
+- the menu offers refresh, accessibility permission request, and current-window pin toggle actions
+- pinned windows are saved to `~/Library/Application Support/DeskPins/PinnedWindows.json`
+
+Manual step you will likely need:
+
+- grant Accessibility access to the host process you are using to launch the app
+
+If you launch through Terminal:
+
+- add Terminal under `Privacy & Security > Accessibility`
+
+If you launch through Xcode:
+
+- add Xcode under `Privacy & Security > Accessibility`
+
+### 4. Review the current implementation areas
+
+- `App/Support/`: menu-bar-facing app state orchestration
+- `App/MenuBarApp/`: minimal AppKit menu bar shell
 - `Core/Accessibility/`: Accessibility permission and focused-window reads
 - `Core/WindowCatalog/`: CoreGraphics window enumeration, filtering, and search
 - `Core/Pinned/`: pinned-window model, identity, ordering, invalidation state, and JSON persistence
@@ -95,7 +123,8 @@ Use descriptive branches rather than `v1`, `v2`, or `v3`.
 - `codex/feat-project-init`: earliest bootstrap history; kept for traceability, not the branch to continue on
 - `codex/feat-project-init-pr`: the stable review branch for the current bootstrap PR
 - `codex/feat-pinning-workspace-state`: a completed local feature branch that introduced the workspace coordinator and has already been folded forward
-- `codex/feat-pinned-store-persistence`: the branch that should continue receiving new implementation work now
+- `codex/feat-pinned-store-persistence`: a completed local feature branch that introduced JSON persistence and has already been folded forward
+- `codex/feat-menu-bar-app-shell`: the branch that should continue receiving new implementation work now
 
 Branch naming format:
 
@@ -131,8 +160,9 @@ See these documents for the current source of truth:
 For this bootstrap PR, the fastest review path is:
 
 1. read `Docs/architecture.md`
-2. skim `Core/Pinning/`
+2. skim `App/Support/` and `App/MenuBarApp/`
 3. run `./Scripts/verify.sh`
-4. inspect the smoke tests in `Tools/`
+4. optionally launch `swift run DeskPinsMenuBarApp`
+5. inspect the smoke tests in `Tools/`
 
-That should give you a good picture of the current foundation before the menu bar app shell is added.
+That should give you a good picture of the current foundation before overlay windows and hotkeys are added.

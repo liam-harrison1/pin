@@ -7,12 +7,15 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "DeskPinsAppSupport", targets: ["DeskPinsAppSupport"]),
         .library(name: "DeskPinsAccessibility", targets: ["DeskPinsAccessibility"]),
         .library(name: "DeskPinsWindowCatalog", targets: ["DeskPinsWindowCatalog"]),
         .library(name: "DeskPinsOverlay", targets: ["DeskPinsOverlay"]),
         .library(name: "DeskPinsPinned", targets: ["DeskPinsPinned"]),
         .library(name: "DeskPinsHotKey", targets: ["DeskPinsHotKey"]),
         .library(name: "DeskPinsPinning", targets: ["DeskPinsPinning"]),
+        .executable(name: "DeskPinsMenuBarApp", targets: ["DeskPinsMenuBarApp"]),
+        .executable(name: "DeskPinsAppSupportSmokeTests", targets: ["DeskPinsAppSupportSmokeTests"]),
         .executable(name: "DeskPinsPinnedSmokeTests", targets: ["DeskPinsPinnedSmokeTests"]),
         .executable(
             name: "DeskPinsPinnedPersistenceSmokeTests",
@@ -23,6 +26,16 @@ let package = Package(
         .executable(name: "DeskPinsPinningSmokeTests", targets: ["DeskPinsPinningSmokeTests"])
     ],
     targets: [
+        .target(
+            name: "DeskPinsAppSupport",
+            dependencies: [
+                "DeskPinsAccessibility",
+                "DeskPinsPinning",
+                "DeskPinsPinned",
+                "DeskPinsWindowCatalog"
+            ],
+            path: "App/Support"
+        ),
         .target(
             name: "DeskPinsAccessibility",
             dependencies: ["DeskPinsPinned"],
@@ -49,6 +62,16 @@ let package = Package(
             name: "DeskPinsPinning",
             dependencies: ["DeskPinsAccessibility", "DeskPinsPinned", "DeskPinsWindowCatalog"],
             path: "Core/Pinning"
+        ),
+        .executableTarget(
+            name: "DeskPinsMenuBarApp",
+            dependencies: ["DeskPinsAppSupport"],
+            path: "App/MenuBarApp"
+        ),
+        .executableTarget(
+            name: "DeskPinsAppSupportSmokeTests",
+            dependencies: ["DeskPinsAppSupport"],
+            path: "Tools/DeskPinsAppSupportSmokeTests"
         ),
         .executableTarget(
             name: "DeskPinsPinnedSmokeTests",

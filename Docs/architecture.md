@@ -12,13 +12,14 @@ This architecture intentionally avoids private API window server manipulation.
 
 ## Current Bootstrap State
 
-The repository currently bootstraps through Swift Package Manager because full Xcode-backed macOS app builds are not available in the active local developer setup.
+The repository currently bootstraps through Swift Package Manager even though full Xcode is now available locally.
 
 That means:
 
 - core modules compile as SwiftPM targets
-- verification currently uses `swift build` plus a smoke-test executable
-- the menu bar app target will be added once full Xcode tooling is available
+- a minimal AppKit menu bar shell is available as a SwiftPM executable target
+- verification currently uses `swift build` plus smoke-test executables
+- a dedicated Xcode project can still be added later if the app shell outgrows package-only wiring
 
 ## Design Principles
 
@@ -35,6 +36,7 @@ Owns:
 
 - app startup
 - menu bar status item
+- app-support state orchestration for menu-driven actions
 - settings entry
 - lifecycle wiring
 

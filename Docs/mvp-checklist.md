@@ -18,9 +18,9 @@
 
 ## Phase 1: Menu Bar and Permission Foundation
 
-- [ ] Create a runnable menu bar app shell.
+- [x] Create a runnable menu bar app shell.
 - [x] Add Accessibility trust detection.
-- [ ] Add a permission guidance entry in the UI.
+- [x] Add a permission guidance entry in the UI.
 - [ ] Add basic app logging for startup and action failures.
 - [ ] Add a settings surface for shortcut and ordering behavior.
 
@@ -61,7 +61,7 @@
 
 ## Acceptance Checks
 
-- [ ] A user can pin the current window after granting Accessibility.
+- [x] A user can pin the current window after granting Accessibility.
 - [ ] A user can pin a non-focused visible window from the window list.
 - [ ] Three to five pinned windows remain manageable without app instability.
 - [ ] The app never silently fails on missing permission.
