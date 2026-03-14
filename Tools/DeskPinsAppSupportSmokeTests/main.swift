@@ -17,6 +17,7 @@ struct DeskPinsAppSupportSmokeTests {
             try testControllerCanToggleVisibleWindowFromWorkspace()
             try testControllerCanBringPinnedWindowForward()
             try testControllerCreatesOverlayTargetsForVisiblePinnedWindows()
+            try testControllerPromotesFrontmostPinnedWindowOnRefresh()
             print("DeskPinsAppSupport smoke tests passed")
         } catch {
             fputs("App support smoke test failure: \(error)\n", stderr)
@@ -370,6 +371,82 @@ struct DeskPinsAppSupportSmokeTests {
         try expect(
             windowActivator.activatedReferences == [pinnedWindow.reference],
             message: "app controller should route bring-forward requests through the window activator"
+        )
+    }
+
+    @MainActor
+    private static func testControllerPromotesFrontmostPinnedWindowOnRefresh() throws {
+        let tempRoot = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let fileURL = tempRoot.appendingPathComponent("PinnedStore.json")
+        let persistence = JSONPinnedWindowStorePersistence(fileURL: fileURL)
+        let olderPin = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 910,
+                windowTitle: "Older Pin",
+                windowNumber: 1910,
+                bounds: PinnedWindowBounds(x: 10, y: 10, width: 600, height: 380)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 17_000)
+        )
+        let newerPin = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 920,
+                windowTitle: "Newer Pin",
+                windowNumber: 1920,
+                bounds: PinnedWindowBounds(x: 40, y: 40, width: 640, height: 420)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 17_100)
+        )
+        _ = try persistence.saveStore(
+            PinnedWindowStore(windows: [olderPin, newerPin]),
+            savedAt: Date(timeIntervalSince1970: 17_200)
+        )
+
+        let frontmostOlderEntry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 910,
+            ownerName: "Notes",
+            windowTitle: "Older Pin",
+            windowNumber: 1910,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 12, y: 14, width: 602, height: 382),
+            isOnScreen: true
+        )
+        let secondNewerEntry = WindowCatalogEntry(
+            frontToBackIndex: 1,
+            ownerPID: 920,
+            ownerName: "Browser",
+            windowTitle: "Newer Pin",
+            windowNumber: 1920,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 42, y: 44, width: 642, height: 422),
+            isOnScreen: true
+        )
+
+        let controller = try DeskPinsMenuBarStateController(
+            trustChecker: StaticAccessibilityTrustChecker(status: .trusted),
+            focusedReader: StaticFocusedWindowReader(
+                snapshot: FocusedWindowSnapshot(
+                    ownerPID: 910,
+                    applicationName: "Notes",
+                    windowTitle: "Older Pin"
+                )
+            ),
+            catalogReader: StaticWindowCatalogReader(
+                catalog: WindowCatalog(entries: [frontmostOlderEntry, secondNewerEntry])
+            ),
+            persistence: persistence
+        )
+
+        _ = try controller.refreshWorkspace()
+
+        try expect(
+            controller.presentation().pinnedWindows.map(\.title) == ["Older Pin", "Newer Pin"],
+            message: "refresh should promote the frontmost pinned window so click order drives pin stacking"
         )
     }
 

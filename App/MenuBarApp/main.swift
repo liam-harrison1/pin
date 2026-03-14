@@ -470,14 +470,14 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private func startRefreshTimer() {
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(
-            withTimeInterval: 0.1,
+            withTimeInterval: 0.05,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.performBackgroundRefresh()
             }
         }
-        refreshTimer?.tolerance = 0.2
+        refreshTimer?.tolerance = 0.01
     }
 
     private func performBackgroundRefresh() {

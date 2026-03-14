@@ -72,6 +72,7 @@ public final class DeskPinsMenuBarStateController<
 
     public private(set) var store: PinnedWindowStore
     public private(set) var workspaceSnapshot: PinningWorkspaceSnapshot?
+    private var lastFrontmostPinnedWindowID: UUID?
 
     public init(
         trustChecker: TrustChecker,
@@ -104,13 +105,19 @@ public final class DeskPinsMenuBarStateController<
     public func refreshWorkspace(
         using focusCapture: PinningWorkspaceFocusCapture?
     ) throws -> PinningWorkspaceSnapshot {
-        let snapshot = try makeCoordinator().refresh(
+        var snapshot = try makeCoordinator().refresh(
             store: &store,
             focusCapture: focusCapture,
             at: .now
         )
+
+        updateInteractionOrderingFromFrontmostPinnedWindow(
+            visibleEntries: snapshot.visibleEntries,
+            at: snapshot.refreshedAt
+        )
+        snapshot.pinnedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+
         workspaceSnapshot = snapshot
-        try persistStore()
         return snapshot
     }
 
@@ -288,6 +295,26 @@ public final class DeskPinsMenuBarStateController<
         case .requiresAccessibilityPermission:
             return .requiresAccessibilityPermission
         }
+    }
+
+    private func updateInteractionOrderingFromFrontmostPinnedWindow(
+        visibleEntries: [WindowCatalogEntry],
+        at date: Date
+    ) {
+        let frontmostPinnedWindowID = visibleEntries.compactMap { entry in
+            store.matchingWindow(for: entry.asPinnedReference())?.id
+        }.first
+
+        guard frontmostPinnedWindowID != lastFrontmostPinnedWindowID else {
+            return
+        }
+
+        lastFrontmostPinnedWindowID = frontmostPinnedWindowID
+        guard let frontmostPinnedWindowID else {
+            return
+        }
+
+        _ = store.markActivated(id: frontmostPinnedWindowID, at: date)
     }
 
     private func persistStore() throws {

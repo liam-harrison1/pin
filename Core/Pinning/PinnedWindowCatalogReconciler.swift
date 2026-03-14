@@ -17,11 +17,17 @@ public struct PinnedWindowCatalogReconciler: Sendable {
             if let matchingEntry = catalog.entries.first(where: { entry in
                 window.reference.likelyMatches(entry.asPinnedReference())
             }) {
-                _ = store.markObserved(
-                    id: window.id,
-                    reference: matchingEntry.asPinnedReference(),
-                    at: date
-                )
+                let updatedReference = matchingEntry.asPinnedReference()
+                let shouldRefreshObservedState =
+                    window.isInvalidated || window.reference != updatedReference
+
+                if shouldRefreshObservedState {
+                    _ = store.markObserved(
+                        id: window.id,
+                        reference: updatedReference,
+                        at: date
+                    )
+                }
                 continue
             }
 

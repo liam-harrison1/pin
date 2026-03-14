@@ -1,3 +1,4 @@
+@preconcurrency import AppKit
 @preconcurrency import CoreGraphics
 @preconcurrency import ScreenCaptureKit
 import Foundation
@@ -56,8 +57,9 @@ public struct LiveWindowPreviewCapturer: WindowPreviewCapturing {
 
         let contentFilter = SCContentFilter(desktopIndependentWindow: window)
         let configuration = SCStreamConfiguration()
-        configuration.width = max(1, Int(window.frame.width))
-        configuration.height = max(1, Int(window.frame.height))
+        let captureSize = capturePixelSize(for: window.frame)
+        configuration.width = captureSize.width
+        configuration.height = captureSize.height
         configuration.scalesToFit = true
 
         do {
@@ -135,5 +137,25 @@ public struct LiveWindowPreviewCapturer: WindowPreviewCapturing {
         abs(bounds.y - frame.origin.y) <= 16 &&
         abs(bounds.width - frame.width) <= 24 &&
         abs(bounds.height - frame.height) <= 24
+    }
+
+    private func capturePixelSize(for frame: CGRect) -> (width: Int, height: Int) {
+        let scale = backingScaleFactor(for: frame)
+        let width = max(1, Int((frame.width * scale).rounded(.up)))
+        let height = max(1, Int((frame.height * scale).rounded(.up)))
+        return (width, height)
+    }
+
+    private func backingScaleFactor(for frame: CGRect) -> Double {
+        let midpoint = CGPoint(x: frame.midX, y: frame.midY)
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(midpoint) }) {
+            return screen.backingScaleFactor
+        }
+
+        if let intersectingScreen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) {
+            return intersectingScreen.backingScaleFactor
+        }
+
+        return Double(NSScreen.main?.backingScaleFactor ?? 2)
     }
 }

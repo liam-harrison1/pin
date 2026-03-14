@@ -26,12 +26,14 @@ public struct PinnedWindowOverlayTarget: Sendable, Equatable, Identifiable {
 
 @MainActor
 public final class PinnedWindowOverlayManager {
+    fileprivate static let previewRefreshInterval: TimeInterval = 0.12
     private let permissionChecker: any ScreenRecordingPermissionChecking
     private let previewCapturer: any WindowPreviewCapturing
     private let captureRequestTimeout: TimeInterval
     private var bundlesByID: [UUID: PinnedOverlayBundle] = [:]
     private var captureTasks: [UUID: Task<Void, Never>] = [:]
     private var captureRequestIDs: [UUID: UUID] = [:]
+    private var currentTargetOrder: [UUID] = []
 
     public convenience init(
         permissionChecker: any ScreenRecordingPermissionChecking = LiveScreenRecordingPermissionChecker(),
@@ -65,6 +67,8 @@ public final class PinnedWindowOverlayManager {
 
     public func updateOverlays(with targets: [PinnedWindowOverlayTarget]) {
         let targetIDs = Set(targets.map(\.id))
+        let desiredTargetOrder = targets.map(\.id)
+        let requiresFrontReorder = desiredTargetOrder != currentTargetOrder
 
         for id in bundlesByID.keys where !targetIDs.contains(id) {
             cancelCapture(for: id)
@@ -83,9 +87,11 @@ public final class PinnedWindowOverlayManager {
                 bundle = newBundle
             }
 
-            bundle.orderFront()
+            bundle.orderFrontIfNeeded(force: requiresFrontReorder)
             refreshPreviewIfNeeded(for: target, bundle: bundle)
         }
+
+        currentTargetOrder = desiredTargetOrder
     }
 
     public func removeAllOverlays() {
@@ -93,6 +99,7 @@ public final class PinnedWindowOverlayManager {
         captureIDs.forEach(cancelCapture(for:))
         bundlesByID.values.forEach { $0.close() }
         bundlesByID.removeAll()
+        currentTargetOrder.removeAll()
     }
 
     private func refreshPreviewIfNeeded(
@@ -230,7 +237,11 @@ private final class PinnedOverlayBundle {
         badgeWindow.apply(target: target)
     }
 
-    func orderFront() {
+    func orderFrontIfNeeded(force: Bool) {
+        guard force || !previewWindow.isVisible || !badgeWindow.isVisible else {
+            return
+        }
+
         previewWindow.orderFrontRegardless()
         badgeWindow.orderFrontRegardless()
     }
@@ -253,7 +264,7 @@ private final class PinnedOverlayBundle {
             return true
         }
 
-        return now.timeIntervalSince(lastPreviewRequestAt) >= 0.25
+        return now.timeIntervalSince(lastPreviewRequestAt) >= PinnedWindowOverlayManager.previewRefreshInterval
     }
 
     func markPreviewRequest(
@@ -336,7 +347,9 @@ private final class PinnedPreviewWindow: NSPanel {
 
     func apply(target: PinnedWindowOverlayTarget) {
         let frame = PinnedOverlayCoordinateSpace.appKitFrame(from: target.frame)
-        setFrame(frame, display: true)
+        if !framesApproximatelyEqual(frame, self.frame) {
+            setFrame(frame, display: false)
+        }
         previewView.apply(target: target)
     }
 
@@ -387,14 +400,17 @@ private final class PinnedBadgeWindow: NSPanel {
             .fullScreenAuxiliary,
             .stationary
         ]
-        level = .statusBar
+        level = .floating
         contentView = badgeView
 
         apply(target: target)
     }
 
     func apply(target: PinnedWindowOverlayTarget) {
-        setFrame(Self.badgeFrame(for: target), display: true)
+        let frame = Self.badgeFrame(for: target)
+        if !framesApproximatelyEqual(frame, self.frame) {
+            setFrame(frame, display: false)
+        }
         badgeView.apply(target: target)
     }
 
@@ -412,6 +428,7 @@ private final class PinnedPreviewView: NSView {
     private let messageField = NSTextField(labelWithString: "")
     private let titleField = NSTextField(labelWithString: "")
     private let materialView = NSVisualEffectView(frame: .zero)
+    private var hasPreviewImage = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -421,7 +438,8 @@ private final class PinnedPreviewView: NSView {
         layer?.borderColor = NSColor.white.withAlphaComponent(0.35).cgColor
         layer?.borderWidth = 1
 
-        imageView.imageScaling = .scaleAxesIndependently
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
 
         materialView.state = .active
         materialView.blendingMode = .behindWindow
@@ -443,6 +461,12 @@ private final class PinnedPreviewView: NSView {
         addSubview(imageView)
         addSubview(titleField)
         addSubview(messageField)
+
+        imageView.isHidden = true
+        materialView.isHidden = false
+        messageField.isHidden = false
+        messageField.stringValue = "Refreshing pinned window preview..."
+        alphaValue = 0.88
     }
 
     @available(*, unavailable)
@@ -480,17 +504,22 @@ private final class PinnedPreviewView: NSView {
                 cgImage: image,
                 size: NSSize(width: image.width, height: image.height)
             )
+            hasPreviewImage = true
             imageView.isHidden = false
             materialView.isHidden = true
             messageField.isHidden = true
             alphaValue = 1
         } else {
+            hasPreviewImage = false
             showUnavailablePlaceholder(title: title)
         }
     }
 
     func showLoadingPlaceholder(title: String) {
         titleField.stringValue = title
+        guard !hasPreviewImage else {
+            return
+        }
         imageView.isHidden = true
         materialView.isHidden = false
         messageField.isHidden = false
@@ -500,6 +529,7 @@ private final class PinnedPreviewView: NSView {
 
     func showPermissionPlaceholder(title: String) {
         titleField.stringValue = title
+        hasPreviewImage = false
         imageView.isHidden = true
         materialView.isHidden = false
         messageField.isHidden = false
@@ -509,6 +539,7 @@ private final class PinnedPreviewView: NSView {
 
     func showUnavailablePlaceholder(title: String) {
         titleField.stringValue = title
+        hasPreviewImage = false
         imageView.isHidden = true
         materialView.isHidden = false
         messageField.isHidden = false
@@ -518,6 +549,8 @@ private final class PinnedPreviewView: NSView {
 
     func showStalePlaceholder(title: String) {
         titleField.stringValue = title
+        hasPreviewImage = false
+        imageView.isHidden = true
         materialView.isHidden = false
         messageField.isHidden = false
         messageField.stringValue = "Pinned window is stale. Refresh to reconnect it."
@@ -573,6 +606,17 @@ private final class PinnedBadgeView: NSView {
             : "Pinned window: \(target.title)"
         needsLayout = true
     }
+}
+
+private func framesApproximatelyEqual(
+    _ lhs: CGRect,
+    _ rhs: CGRect,
+    tolerance: CGFloat = 0.5
+) -> Bool {
+    abs(lhs.origin.x - rhs.origin.x) <= tolerance &&
+    abs(lhs.origin.y - rhs.origin.y) <= tolerance &&
+    abs(lhs.size.width - rhs.size.width) <= tolerance &&
+    abs(lhs.size.height - rhs.size.height) <= tolerance
 }
 
 private enum PinnedOverlayCoordinateSpace {
