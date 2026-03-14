@@ -73,6 +73,7 @@ public final class DeskPinsMenuBarStateController<
     public private(set) var store: PinnedWindowStore
     public private(set) var workspaceSnapshot: PinningWorkspaceSnapshot?
     private var lastFrontmostPinnedWindowID: UUID?
+    private var directInteractionPinnedWindowID: UUID?
 
     public init(
         trustChecker: TrustChecker,
@@ -96,6 +97,23 @@ public final class DeskPinsMenuBarStateController<
     public func captureWorkspaceForMenu() throws -> PinningWorkspaceSnapshot {
         let focusCapture = makeCoordinator().captureFocus()
         return try refreshWorkspace(using: focusCapture)
+    }
+
+    public func setDirectInteractionPinnedWindow(id: UUID?) {
+        guard let id else {
+            directInteractionPinnedWindowID = nil
+            return
+        }
+
+        directInteractionPinnedWindowID = store.window(id: id) == nil ? nil : id
+    }
+
+    public func focusedPinnedWindowID() -> UUID? {
+        guard let focusedEntry = workspaceSnapshot?.focusedEntry else {
+            return nil
+        }
+
+        return store.matchingWindow(for: focusedEntry.asPinnedReference())?.id
     }
 
     public func refreshWorkspace() throws -> PinningWorkspaceSnapshot {
@@ -236,6 +254,7 @@ public final class DeskPinsMenuBarStateController<
         let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
 
         return orderedWindows.compactMap { pinnedWindow in
+            let shouldRenderPreview = pinnedWindow.id != directInteractionPinnedWindowID
             if let visibleEntry = visibleEntries.first(where: { entry in
                 pinnedWindow.reference.likelyMatches(entry.asPinnedReference())
             }) {
@@ -249,6 +268,7 @@ public final class DeskPinsMenuBarStateController<
                         height: visibleEntry.bounds.height
                     ),
                     isStale: pinnedWindow.isInvalidated,
+                    shouldRenderPreview: shouldRenderPreview,
                     reference: pinnedWindow.reference
                 )
             }
@@ -267,6 +287,7 @@ public final class DeskPinsMenuBarStateController<
                     height: bounds.height
                 ),
                 isStale: pinnedWindow.isInvalidated,
+                shouldRenderPreview: shouldRenderPreview,
                 reference: pinnedWindow.reference
             )
         }

@@ -26,6 +26,11 @@ public enum WindowPreviewCaptureError: Error, Sendable, Equatable, CustomStringC
 
 public protocol WindowPreviewCapturing: Sendable {
     func capturePreview(for reference: PinnedWindowReference) async throws -> CGImage?
+    func stopAllPreviews() async
+}
+
+public extension WindowPreviewCapturing {
+    func stopAllPreviews() async {}
 }
 
 public struct NoopWindowPreviewCapturer: WindowPreviewCapturing {
@@ -34,6 +39,8 @@ public struct NoopWindowPreviewCapturer: WindowPreviewCapturing {
     public func capturePreview(for reference: PinnedWindowReference) async throws -> CGImage? {
         nil
     }
+
+    public func stopAllPreviews() async {}
 }
 
 public struct LiveWindowPreviewCapturer: WindowPreviewCapturing {
@@ -49,7 +56,7 @@ public struct LiveWindowPreviewCapturer: WindowPreviewCapturing {
         shareableContentCacheTTL: TimeInterval = 0.22,
         streamIdleTTL: TimeInterval = 1.8,
         streamWarmupTimeout: TimeInterval = 0.2,
-        preferredFrameRate: Int32 = 30,
+        preferredFrameRate: Int32 = 15,
         preferredQueueDepth: Int = 3
     ) {
         self.permissionChecker = permissionChecker
@@ -92,6 +99,10 @@ public struct LiveWindowPreviewCapturer: WindowPreviewCapturing {
         } catch {
             throw WindowPreviewCaptureError.captureFailed(error.localizedDescription)
         }
+    }
+
+    public func stopAllPreviews() async {
+        await streamRegistry.stopAll()
     }
 
     private func loadShareableWindows() async throws -> [SCWindow] {
@@ -419,7 +430,8 @@ private final class StreamPreviewSession: @unchecked Sendable {
         configuration.width = captureSize.width
         configuration.height = captureSize.height
         configuration.scalesToFit = true
-        configuration.queueDepth = max(1, min(8, queueDepth))
+        configuration.showsCursor = false
+        configuration.queueDepth = max(3, min(8, queueDepth))
         configuration.minimumFrameInterval = CMTime(
             value: 1,
             timescale: max(1, preferredFrameRate)
@@ -428,7 +440,7 @@ private final class StreamPreviewSession: @unchecked Sendable {
         outputSink = StreamPreviewOutputSink(frameStore: frameStore)
         outputQueue = DispatchQueue(
             label: "DeskPins.StreamPreview.\(window.windowID)",
-            qos: .userInteractive
+            qos: .utility
         )
         stream = SCStream(
             filter: contentFilter,
@@ -513,6 +525,7 @@ private final class StreamPreviewOutputSink: NSObject, SCStreamOutput {
     ) {
         guard outputType == .screen,
               CMSampleBufferIsValid(sampleBuffer),
+              sampleBufferHasCompleteFrame(sampleBuffer),
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
@@ -527,6 +540,19 @@ private final class StreamPreviewOutputSink: NSObject, SCStreamOutput {
         }
 
         frameStore.store(image: cgImage)
+    }
+
+    private func sampleBufferHasCompleteFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+            sampleBuffer,
+            createIfNecessary: false
+        ) as? [[SCStreamFrameInfo: Any]],
+              let statusRaw = attachments.first?[.status] as? Int,
+              let status = SCFrameStatus(rawValue: statusRaw) else {
+            return true
+        }
+
+        return status == .complete
     }
 }
 
