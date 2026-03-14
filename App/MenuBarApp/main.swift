@@ -112,8 +112,11 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private var windowMover: (any WindowMoving)?
     private var activeOverlayDragSession: OverlayDragSession?
     private var dragFlushWorkItem: DispatchWorkItem?
+    private var postDragRefreshWorkItem: DispatchWorkItem?
     private let dragFlushInterval: TimeInterval = 1.0 / 60.0
+    private let postDragRefreshDelay: TimeInterval = 0.06
     private var isStatusMenuOpen = false
+    private var directInteractionPinnedWindowID: UUID?
     private var backgroundRefreshTick = 0
     private let idleRefreshEveryNTicks = 4
 
@@ -241,6 +244,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         do {
             _ = try stateController.captureWorkspaceForMenu()
+            reconcileDirectInteractionMode()
             updateMenuPresentation()
         } catch {
             updateMenuPresentation()
@@ -536,6 +540,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         do {
             _ = try stateController.refreshWorkspaceUsingCachedFocus()
+            reconcileDirectInteractionMode()
             updateMenuPresentation()
         } catch {
             updateMenuPresentation()
@@ -570,6 +575,9 @@ private extension DeskPinsMenuBarAppDelegate {
     func handleOverlayInteraction(_ event: PinnedWindowOverlayInteractionEvent) {
         switch event {
         case .dragBegan(let id, let reference):
+            postDragRefreshWorkItem?.cancel()
+            postDragRefreshWorkItem = nil
+            clearDirectInteractionMode()
             guard let stateController else {
                 return
             }
@@ -597,9 +605,22 @@ private extension DeskPinsMenuBarAppDelegate {
             flushPendingDragDeltas(force: true)
             overlayManager.endInteractionDrag(for: id)
             endActiveOverlayDragSession(commitPendingDrag: false)
-            performBackgroundRefresh()
+            schedulePostDragRefresh()
+        case .contentInteractionRequested(let id, _):
+            guard let stateController else {
+                return
+            }
+
+            do {
+                _ = try stateController.activatePinnedWindow(id: id)
+                enterDirectInteractionMode(for: id)
+                updateMenuPresentation()
+            } catch {
+                clearDirectInteractionMode()
+            }
         case .badgeClicked(let id, _):
             endActiveOverlayDragSession(commitPendingDrag: false)
+            clearDirectInteractionMode()
             guard let stateController else {
                 return
             }
@@ -613,6 +634,31 @@ private extension DeskPinsMenuBarAppDelegate {
                     message: error.localizedDescription
                 )
             }
+        }
+    }
+
+    func enterDirectInteractionMode(for id: UUID) {
+        directInteractionPinnedWindowID = id
+        stateController?.setDirectInteractionPinnedWindow(id: id)
+    }
+
+    func clearDirectInteractionMode() {
+        guard directInteractionPinnedWindowID != nil else {
+            return
+        }
+        directInteractionPinnedWindowID = nil
+        stateController?.setDirectInteractionPinnedWindow(id: nil)
+    }
+
+    func reconcileDirectInteractionMode() {
+        guard let stateController,
+              let directInteractionPinnedWindowID else {
+            return
+        }
+
+        guard stateController.focusedPinnedWindowID() == directInteractionPinnedWindowID else {
+            clearDirectInteractionMode()
+            return
         }
     }
 
@@ -747,6 +793,23 @@ private extension DeskPinsMenuBarAppDelegate {
         activeOverlayDragSession = nil
     }
 
+    func schedulePostDragRefresh() {
+        postDragRefreshWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+            self.postDragRefreshWorkItem = nil
+            self.performBackgroundRefresh()
+        }
+
+        postDragRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + postDragRefreshDelay,
+            execute: workItem
+        )
+    }
+
     func handleHotKey(_ action: DeskPinsHotKeyAction) {
         switch action {
         case .toggleCurrentWindowPin:
@@ -833,6 +896,8 @@ private extension DeskPinsMenuBarAppDelegate {
         hasTornDownUI = true
         refreshTimer?.invalidate()
         refreshTimer = nil
+        postDragRefreshWorkItem?.cancel()
+        postDragRefreshWorkItem = nil
         menu.cancelTracking()
         statusItem.menu = nil
         overlayManager.removeAllOverlays()

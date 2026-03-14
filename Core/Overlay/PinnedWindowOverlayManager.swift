@@ -36,6 +36,7 @@ public enum PinnedWindowOverlayInteractionEvent: Sendable, Equatable {
         deltaY: Double
     )
     case dragEnded(id: UUID, reference: PinnedWindowReference)
+    case contentInteractionRequested(id: UUID, reference: PinnedWindowReference)
     case badgeClicked(id: UUID, reference: PinnedWindowReference)
 }
 
@@ -176,6 +177,17 @@ public final class PinnedWindowOverlayManager {
                 bundlesByID[target.id] = newBundle
                 bundle = newBundle
             }
+
+            if !target.shouldRenderPreview {
+                cancelCapture(for: target.id)
+                bundle.enterDirectInteractionMode()
+                bundle.orderFrontIfNeeded(
+                    force: requiresFrontReorder,
+                    includePreview: false
+                )
+                continue
+            }
+
             refreshPreviewIfNeeded(
                 for: target,
                 bundle: bundle,
@@ -187,7 +199,7 @@ public final class PinnedWindowOverlayManager {
             )
             bundle.orderFrontIfNeeded(
                 force: requiresFrontReorder,
-                includePreview: target.shouldRenderPreview
+                includePreview: true
             )
         }
 
@@ -217,11 +229,7 @@ public final class PinnedWindowOverlayManager {
         refreshInterval: TimeInterval,
         isInteractionActive: Bool
     ) {
-        if !target.shouldRenderPreview {
-            cancelCapture(for: target.id)
-            bundle.hidePreviewForDirectInteraction()
-            return
-        }
+        bundle.restoreAfterDirectInteraction()
 
         if isInteractionActive {
             cancelCapture(for: target.id)
@@ -363,6 +371,7 @@ private final class PinnedOverlayBundle {
     private let badgeWindow: PinnedBadgeWindow
     private var lastPreviewRequestAt: Date?
     private var lastPreviewIdentity: PinnedPreviewIdentity?
+    private var isInDirectInteractionMode = false
 
     init(
         target: PinnedWindowOverlayTarget,
@@ -481,8 +490,21 @@ private final class PinnedOverlayBundle {
         previewWindow.markPreviewAsLive()
     }
 
-    func hidePreviewForDirectInteraction() {
+    func enterDirectInteractionMode() {
+        guard !isInDirectInteractionMode else {
+            return
+        }
+        isInDirectInteractionMode = true
         previewWindow.orderOut(nil)
+        dragHandleWindow.setDirectInteractionMode(true)
+    }
+
+    func restoreAfterDirectInteraction() {
+        guard isInDirectInteractionMode else {
+            return
+        }
+        isInDirectInteractionMode = false
+        dragHandleWindow.setDirectInteractionMode(false)
     }
 
     func isPreviewRequestExpired(at now: Date, timeout: TimeInterval) -> Bool {
@@ -620,6 +642,9 @@ private final class PinnedDragHandleWindow: NSPanel {
     func setInteractionHandler(_ interactionHandler: PinnedWindowOverlayInteractionHandler?) {
         dragHandleView.setInteractionHandler(interactionHandler)
     }
+    func setDirectInteractionMode(_ isEnabled: Bool) {
+        dragHandleView.setDirectInteractionMode(isEnabled)
+    }
     func shiftBy(deltaX: CGFloat, deltaY: CGFloat) {
         setFrame(frame.offsetBy(dx: deltaX, dy: deltaY), display: false)
     }
@@ -634,6 +659,7 @@ private final class PinnedDragHandleView: NSView {
     private var interactionHandler: PinnedWindowOverlayInteractionHandler?
     private var activePointerZone: PointerZone = .passthrough
     private var lastDragScreenPoint: CGPoint?
+    private var isInDirectInteractionMode = false
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -649,21 +675,46 @@ private final class PinnedDragHandleView: NSView {
     func setInteractionHandler(_ interactionHandler: PinnedWindowOverlayInteractionHandler?) {
         self.interactionHandler = interactionHandler
     }
+    func setDirectInteractionMode(_ isEnabled: Bool) {
+        isInDirectInteractionMode = isEnabled
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
     }
     override func hitTest(_ point: NSPoint) -> NSView? {
-        pointerZone(for: point) == .passthrough ? nil : self
+        guard bounds.contains(point) else {
+            return nil
+        }
+        let zone = pointerZone(for: point)
+        if isInDirectInteractionMode {
+            return zone == .drag ? self : nil
+        }
+        return self
     }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let zone = pointerZone(for: point)
         activePointerZone = zone
-        guard zone == .drag, let target else {
+        guard let target else {
             return
         }
-        lastDragScreenPoint = screenLocation(for: event)
-        interactionHandler?(.dragBegan(id: target.id, reference: target.reference))
+        switch zone {
+        case .drag:
+            lastDragScreenPoint = screenLocation(for: event)
+            interactionHandler?(.dragBegan(id: target.id, reference: target.reference))
+        case .passthrough:
+            guard !isInDirectInteractionMode else {
+                return
+            }
+            interactionHandler?(
+                .contentInteractionRequested(
+                    id: target.id,
+                    reference: target.reference
+                )
+            )
+        case .edgeGuard:
+            return
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
