@@ -24,6 +24,21 @@ public struct PinnedWindowOverlayTarget: Sendable, Equatable, Identifiable {
     }
 }
 
+public enum PinnedWindowOverlayInteractionEvent: Sendable, Equatable {
+    case dragBegan(id: UUID, reference: PinnedWindowReference)
+    case dragChanged(
+        id: UUID,
+        reference: PinnedWindowReference,
+        deltaX: Double,
+        deltaY: Double
+    )
+    case dragEnded(id: UUID, reference: PinnedWindowReference)
+}
+
+public typealias PinnedWindowOverlayInteractionHandler = @MainActor (
+    PinnedWindowOverlayInteractionEvent
+) -> Void
+
 @MainActor
 public final class PinnedWindowOverlayManager {
     fileprivate static let previewRefreshInterval: TimeInterval = 0.12
@@ -34,6 +49,9 @@ public final class PinnedWindowOverlayManager {
     private var captureTasks: [UUID: Task<Void, Never>] = [:]
     private var captureRequestIDs: [UUID: UUID] = [:]
     private var currentTargetOrder: [UUID] = []
+    private var interactionHandler: PinnedWindowOverlayInteractionHandler?
+    private var interactiveDragTargetIDs: Set<UUID> = []
+    private var forceRefreshTargetIDs: Set<UUID> = []
 
     public convenience init(
         permissionChecker: any ScreenRecordingPermissionChecking = LiveScreenRecordingPermissionChecker(),
@@ -65,6 +83,45 @@ public final class PinnedWindowOverlayManager {
         permissionChecker.requestAccessIfNeeded()
     }
 
+    public func setInteractionHandler(
+        _ handler: PinnedWindowOverlayInteractionHandler?
+    ) {
+        interactionHandler = handler
+
+        for bundle in bundlesByID.values {
+            bundle.setInteractionHandler(handler)
+        }
+    }
+
+    public func beginInteractionDrag(for id: UUID) {
+        interactiveDragTargetIDs.insert(id)
+        forceRefreshTargetIDs.remove(id)
+    }
+
+    public func updateInteractionDrag(
+        for id: UUID,
+        deltaX: Double,
+        deltaY: Double
+    ) {
+        guard interactiveDragTargetIDs.contains(id),
+              let bundle = bundlesByID[id] else {
+            return
+        }
+
+        bundle.shiftBy(
+            deltaX: CGFloat(deltaX),
+            deltaY: CGFloat(deltaY)
+        )
+    }
+
+    public func endInteractionDrag(for id: UUID) {
+        guard interactiveDragTargetIDs.remove(id) != nil else {
+            return
+        }
+
+        forceRefreshTargetIDs.insert(id)
+    }
+
     public func updateOverlays(with targets: [PinnedWindowOverlayTarget]) {
         let targetIDs = Set(targets.map(\.id))
         let desiredTargetOrder = targets.map(\.id)
@@ -74,21 +131,35 @@ public final class PinnedWindowOverlayManager {
             cancelCapture(for: id)
             bundlesByID[id]?.close()
             bundlesByID[id] = nil
+            interactiveDragTargetIDs.remove(id)
+            forceRefreshTargetIDs.remove(id)
         }
 
         for target in targets.reversed() {
+            let isInteractionActive = interactiveDragTargetIDs.contains(target.id)
             let bundle: PinnedOverlayBundle
             if let existingBundle = bundlesByID[target.id] {
                 bundle = existingBundle
-                bundle.apply(target: target)
+                bundle.apply(
+                    target: target,
+                    updateFrame: !isInteractionActive
+                )
+                bundle.setInteractionHandler(interactionHandler)
             } else {
-                let newBundle = PinnedOverlayBundle(target: target)
+                let newBundle = PinnedOverlayBundle(
+                    target: target,
+                    interactionHandler: interactionHandler
+                )
                 bundlesByID[target.id] = newBundle
                 bundle = newBundle
             }
 
             bundle.orderFrontIfNeeded(force: requiresFrontReorder)
-            refreshPreviewIfNeeded(for: target, bundle: bundle)
+            refreshPreviewIfNeeded(
+                for: target,
+                bundle: bundle,
+                isInteractionActive: isInteractionActive
+            )
         }
 
         currentTargetOrder = desiredTargetOrder
@@ -100,14 +171,24 @@ public final class PinnedWindowOverlayManager {
         bundlesByID.values.forEach { $0.close() }
         bundlesByID.removeAll()
         currentTargetOrder.removeAll()
+        interactiveDragTargetIDs.removeAll()
+        forceRefreshTargetIDs.removeAll()
     }
 
     private func refreshPreviewIfNeeded(
         for target: PinnedWindowOverlayTarget,
-        bundle: PinnedOverlayBundle
+        bundle: PinnedOverlayBundle,
+        isInteractionActive: Bool
     ) {
+        if isInteractionActive {
+            cancelCapture(for: target.id)
+            bundle.markPreviewAsLive()
+            return
+        }
+
         let now = Date.now
         let screenRecordingStatus = permissionChecker.currentStatus()
+        let shouldForceRefresh = forceRefreshTargetIDs.remove(target.id) != nil
 
         switch screenRecordingStatus {
         case .denied:
@@ -133,7 +214,8 @@ public final class PinnedWindowOverlayManager {
             }
         }
 
-        guard bundle.shouldRefreshPreview(for: target, at: now) else {
+        guard shouldForceRefresh
+                || bundle.shouldRefreshPreview(for: target, at: now) else {
             bundle.markPreviewAsLive()
             return
         }
@@ -222,33 +304,68 @@ public final class PinnedWindowOverlayManager {
 @MainActor
 private final class PinnedOverlayBundle {
     private let previewWindow: PinnedPreviewWindow
+    private let dragHandleWindow: PinnedDragHandleWindow
     private let badgeWindow: PinnedBadgeWindow
     private var lastPreviewRequestAt: Date?
     private var lastPreviewIdentity: PinnedPreviewIdentity?
 
-    init(target: PinnedWindowOverlayTarget) {
+    init(
+        target: PinnedWindowOverlayTarget,
+        interactionHandler: PinnedWindowOverlayInteractionHandler?
+    ) {
         previewWindow = PinnedPreviewWindow(target: target)
+        dragHandleWindow = PinnedDragHandleWindow(
+            target: target,
+            interactionHandler: interactionHandler
+        )
         badgeWindow = PinnedBadgeWindow(target: target)
         apply(target: target)
     }
 
-    func apply(target: PinnedWindowOverlayTarget) {
-        previewWindow.apply(target: target)
-        badgeWindow.apply(target: target)
+    func apply(
+        target: PinnedWindowOverlayTarget,
+        updateFrame: Bool = true
+    ) {
+        previewWindow.apply(
+            target: target,
+            updateFrame: updateFrame
+        )
+        dragHandleWindow.apply(
+            target: target,
+            updateFrame: updateFrame
+        )
+        badgeWindow.apply(
+            target: target,
+            updateFrame: updateFrame
+        )
     }
 
     func orderFrontIfNeeded(force: Bool) {
-        guard force || !previewWindow.isVisible || !badgeWindow.isVisible else {
+        guard force || !previewWindow.isVisible || !dragHandleWindow.isVisible || !badgeWindow.isVisible else {
             return
         }
 
         previewWindow.orderFrontRegardless()
+        dragHandleWindow.orderFrontRegardless()
         badgeWindow.orderFrontRegardless()
     }
 
     func close() {
         previewWindow.close()
+        dragHandleWindow.close()
         badgeWindow.close()
+    }
+
+    func setInteractionHandler(
+        _ interactionHandler: PinnedWindowOverlayInteractionHandler?
+    ) {
+        dragHandleWindow.setInteractionHandler(interactionHandler)
+    }
+
+    func shiftBy(deltaX: CGFloat, deltaY: CGFloat) {
+        previewWindow.shiftBy(deltaX: deltaX, deltaY: deltaY)
+        dragHandleWindow.shiftBy(deltaX: deltaX, deltaY: deltaY)
+        badgeWindow.shiftBy(deltaX: deltaX, deltaY: deltaY)
     }
 
     func shouldRefreshPreview(
@@ -345,12 +462,21 @@ private final class PinnedPreviewWindow: NSPanel {
         apply(target: target)
     }
 
-    func apply(target: PinnedWindowOverlayTarget) {
-        let frame = PinnedOverlayCoordinateSpace.appKitFrame(from: target.frame)
-        if !framesApproximatelyEqual(frame, self.frame) {
-            setFrame(frame, display: false)
+    func apply(
+        target: PinnedWindowOverlayTarget,
+        updateFrame: Bool = true
+    ) {
+        if updateFrame {
+            let frame = PinnedOverlayCoordinateSpace.appKitFrame(from: target.frame)
+            if !framesApproximatelyEqual(frame, self.frame) {
+                setFrame(frame, display: false)
+            }
         }
         previewView.apply(target: target)
+    }
+
+    func shiftBy(deltaX: CGFloat, deltaY: CGFloat) {
+        setFrame(frame.offsetBy(dx: deltaX, dy: deltaY), display: false)
     }
 
     func showPreviewImage(_ image: CGImage?, title: String) {
@@ -375,6 +501,153 @@ private final class PinnedPreviewWindow: NSPanel {
 
     func markPreviewAsLive() {
         previewView.markPreviewAsLive()
+    }
+}
+
+@MainActor
+private final class PinnedDragHandleWindow: NSPanel {
+    private let dragHandleView = PinnedDragHandleView(frame: .zero)
+
+    init(
+        target: PinnedWindowOverlayTarget,
+        interactionHandler: PinnedWindowOverlayInteractionHandler?
+    ) {
+        super.init(
+            contentRect: Self.dragHandleFrame(for: target),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = false
+        hidesOnDeactivate = false
+        collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .stationary
+        ]
+        level = .floating
+        contentView = dragHandleView
+
+        dragHandleView.setInteractionHandler(interactionHandler)
+        apply(target: target)
+    }
+
+    func apply(
+        target: PinnedWindowOverlayTarget,
+        updateFrame: Bool = true
+    ) {
+        if updateFrame {
+            let frame = Self.dragHandleFrame(for: target)
+            if !framesApproximatelyEqual(frame, self.frame) {
+                setFrame(frame, display: false)
+            }
+        }
+        dragHandleView.setTarget(target)
+    }
+
+    func setInteractionHandler(
+        _ interactionHandler: PinnedWindowOverlayInteractionHandler?
+    ) {
+        dragHandleView.setInteractionHandler(interactionHandler)
+    }
+
+    func shiftBy(deltaX: CGFloat, deltaY: CGFloat) {
+        setFrame(frame.offsetBy(dx: deltaX, dy: deltaY), display: false)
+    }
+
+    private static func dragHandleFrame(for target: PinnedWindowOverlayTarget) -> CGRect {
+        let displayFrame = PinnedOverlayCoordinateSpace.appKitFrame(from: target.frame)
+        let sideInset = min(96, max(32, displayFrame.width * 0.12))
+        let width = max(64, displayFrame.width - (sideInset * 2))
+        let height = min(34, max(24, displayFrame.height * 0.12))
+        let x = displayFrame.minX + sideInset
+        let y = displayFrame.maxY - height - 4
+
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+private final class PinnedDragHandleView: NSView {
+    private var target: PinnedWindowOverlayTarget?
+    private var interactionHandler: PinnedWindowOverlayInteractionHandler?
+    private var lastDragScreenPoint: CGPoint?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func setTarget(_ target: PinnedWindowOverlayTarget) {
+        self.target = target
+    }
+
+    func setInteractionHandler(
+        _ interactionHandler: PinnedWindowOverlayInteractionHandler?
+    ) {
+        self.interactionHandler = interactionHandler
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let target else {
+            return
+        }
+
+        lastDragScreenPoint = screenLocation(for: event)
+        interactionHandler?(.dragBegan(id: target.id, reference: target.reference))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let target, let previousPoint = lastDragScreenPoint else {
+            return
+        }
+
+        let currentPoint = screenLocation(for: event)
+        let deltaX = Double(currentPoint.x - previousPoint.x)
+        let deltaY = Double(currentPoint.y - previousPoint.y)
+        lastDragScreenPoint = currentPoint
+
+        if deltaX == 0 && deltaY == 0 {
+            return
+        }
+
+        interactionHandler?(
+            .dragChanged(
+                id: target.id,
+                reference: target.reference,
+                deltaX: deltaX,
+                deltaY: deltaY
+            )
+        )
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            lastDragScreenPoint = nil
+        }
+
+        guard let target else {
+            return
+        }
+
+        interactionHandler?(.dragEnded(id: target.id, reference: target.reference))
+    }
+
+    private func screenLocation(for event: NSEvent) -> CGPoint {
+        guard let window else {
+            return NSEvent.mouseLocation
+        }
+
+        return window.convertPoint(toScreen: event.locationInWindow)
     }
 }
 
@@ -406,12 +679,21 @@ private final class PinnedBadgeWindow: NSPanel {
         apply(target: target)
     }
 
-    func apply(target: PinnedWindowOverlayTarget) {
-        let frame = Self.badgeFrame(for: target)
-        if !framesApproximatelyEqual(frame, self.frame) {
-            setFrame(frame, display: false)
+    func apply(
+        target: PinnedWindowOverlayTarget,
+        updateFrame: Bool = true
+    ) {
+        if updateFrame {
+            let frame = Self.badgeFrame(for: target)
+            if !framesApproximatelyEqual(frame, self.frame) {
+                setFrame(frame, display: false)
+            }
         }
         badgeView.apply(target: target)
+    }
+
+    func shiftBy(deltaX: CGFloat, deltaY: CGFloat) {
+        setFrame(frame.offsetBy(dx: deltaX, dy: deltaY), display: false)
     }
 
     private static func badgeFrame(for target: PinnedWindowOverlayTarget) -> CGRect {

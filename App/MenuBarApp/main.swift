@@ -31,6 +31,28 @@ enum DeskPinsMenuBarApp {
 
 @MainActor
 private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private struct OverlayDragSession {
+        var pinnedWindowID: UUID
+        var reference: PinnedWindowReference
+        var moveSession: WindowMoveDragSession?
+        var pendingDeltaX: Double
+        var pendingDeltaY: Double
+        var lastFlushAt: Date
+
+        init(
+            pinnedWindowID: UUID,
+            reference: PinnedWindowReference,
+            moveSession: WindowMoveDragSession?
+        ) {
+            self.pinnedWindowID = pinnedWindowID
+            self.reference = reference
+            self.moveSession = moveSession
+            pendingDeltaX = 0
+            pendingDeltaY = 0
+            lastFlushAt = .distantPast
+        }
+    }
+
     private let statusItem = NSStatusBar.system.statusItem(
         withLength: NSStatusItem.variableLength
     )
@@ -87,6 +109,10 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private var signalSources: [DispatchSourceSignal] = []
     private var hasTornDownUI = false
     private var hotKeyController: DeskPinsGlobalHotKeyController?
+    private var windowMover: (any WindowMoving)?
+    private var activeOverlayDragSession: OverlayDragSession?
+    private var dragFlushWorkItem: DispatchWorkItem?
+    private let dragFlushInterval: TimeInterval = 1.0 / 60.0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
@@ -94,6 +120,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         do {
             stateController = try makeStateController()
+            configureOverlayInteractionHandler()
             _ = try stateController?.captureWorkspaceForMenu()
             try installHotKeys()
             updateMenuPresentation()
@@ -108,9 +135,11 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        endActiveOverlayDragSession(commitPendingDrag: false)
         teardownStatusUI()
         hotKeyController?.unregisterAll()
         hotKeyController = nil
+        overlayManager.setInteractionHandler(nil)
         cancelSignalHandlers()
     }
 
@@ -179,6 +208,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             fileURL: try deskPinsPinnedStoreFileURL()
         )
         let windowActivator = LiveWindowActivator(trustChecker: trustChecker)
+        windowMover = LiveWindowMover(trustChecker: trustChecker)
 
         return try LiveDeskPinsStateController(
             trustChecker: trustChecker,
@@ -512,6 +542,177 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 }
 
 private extension DeskPinsMenuBarAppDelegate {
+    func configureOverlayInteractionHandler() {
+        overlayManager.setInteractionHandler { [weak self] event in
+            self?.handleOverlayInteraction(event)
+        }
+    }
+
+    func handleOverlayInteraction(_ event: PinnedWindowOverlayInteractionEvent) {
+        switch event {
+        case .dragBegan(let id, let reference):
+            guard let stateController else {
+                return
+            }
+
+            do {
+                _ = try stateController.activatePinnedWindow(id: id)
+                updateMenuPresentation()
+            } catch {}
+
+            beginOverlayDragSession(
+                pinnedWindowID: id,
+                reference: reference
+            )
+        case .dragChanged(let id, _, let deltaX, let deltaY):
+            guard var dragSession = activeOverlayDragSession,
+                  dragSession.pinnedWindowID == id else {
+                return
+            }
+
+            dragSession.pendingDeltaX += deltaX
+            dragSession.pendingDeltaY += deltaY
+            activeOverlayDragSession = dragSession
+            schedulePendingDragFlush()
+        case .dragEnded(let id, _):
+            flushPendingDragDeltas(force: true)
+            overlayManager.endInteractionDrag(for: id)
+            endActiveOverlayDragSession(commitPendingDrag: false)
+            performBackgroundRefresh()
+        }
+    }
+
+    func beginOverlayDragSession(
+        pinnedWindowID: UUID,
+        reference: PinnedWindowReference
+    ) {
+        endActiveOverlayDragSession(commitPendingDrag: false)
+        overlayManager.beginInteractionDrag(for: pinnedWindowID)
+
+        let moveSession: WindowMoveDragSession?
+        if let windowMover {
+            moveSession = try? windowMover.beginDragSession(for: reference)
+        } else {
+            moveSession = nil
+        }
+        activeOverlayDragSession = OverlayDragSession(
+            pinnedWindowID: pinnedWindowID,
+            reference: reference,
+            moveSession: moveSession
+        )
+    }
+
+    func schedulePendingDragFlush() {
+        guard dragFlushWorkItem == nil,
+              let dragSession = activeOverlayDragSession else {
+            return
+        }
+
+        let elapsed = Date.now.timeIntervalSince(dragSession.lastFlushAt)
+        let delay = max(0, dragFlushInterval - elapsed)
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.dragFlushWorkItem = nil
+            self.flushPendingDragDeltas(force: true)
+
+            if let pendingDragSession = self.activeOverlayDragSession,
+               pendingDragSession.pendingDeltaX != 0
+                || pendingDragSession.pendingDeltaY != 0 {
+                self.schedulePendingDragFlush()
+            }
+        }
+
+        dragFlushWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + delay,
+            execute: workItem
+        )
+    }
+
+    func flushPendingDragDeltas(force: Bool) {
+        guard var dragSession = activeOverlayDragSession else {
+            return
+        }
+
+        if !force {
+            let elapsed = Date.now.timeIntervalSince(dragSession.lastFlushAt)
+            if elapsed < dragFlushInterval {
+                schedulePendingDragFlush()
+                return
+            }
+        }
+
+        let deltaX = dragSession.pendingDeltaX
+        let deltaY = dragSession.pendingDeltaY
+        guard deltaX != 0 || deltaY != 0 else {
+            return
+        }
+
+        dragSession.pendingDeltaX = 0
+        dragSession.pendingDeltaY = 0
+        dragSession.lastFlushAt = .now
+        activeOverlayDragSession = dragSession
+
+        overlayManager.updateInteractionDrag(
+            for: dragSession.pinnedWindowID,
+            deltaX: deltaX,
+            deltaY: deltaY
+        )
+
+        guard let windowMover else {
+            return
+        }
+
+        do {
+            if let moveSession = dragSession.moveSession {
+                try windowMover.moveWindow(
+                    in: moveSession,
+                    deltaX: deltaX,
+                    deltaY: -deltaY
+                )
+            } else {
+                try windowMover.moveWindow(
+                    reference: dragSession.reference,
+                    deltaX: deltaX,
+                    deltaY: -deltaY
+                )
+            }
+        } catch {
+            if dragSession.moveSession != nil {
+                do {
+                    try windowMover.moveWindow(
+                        reference: dragSession.reference,
+                        deltaX: deltaX,
+                        deltaY: -deltaY
+                    )
+                } catch {}
+            }
+        }
+    }
+
+    func endActiveOverlayDragSession(commitPendingDrag: Bool) {
+        if commitPendingDrag {
+            flushPendingDragDeltas(force: true)
+        }
+
+        dragFlushWorkItem?.cancel()
+        dragFlushWorkItem = nil
+
+        guard let dragSession = activeOverlayDragSession else {
+            return
+        }
+
+        if let moveSession = dragSession.moveSession {
+            windowMover?.endDragSession(moveSession)
+        }
+
+        overlayManager.endInteractionDrag(for: dragSession.pinnedWindowID)
+        activeOverlayDragSession = nil
+    }
+
     func handleHotKey(_ action: DeskPinsHotKeyAction) {
         switch action {
         case .toggleCurrentWindowPin:

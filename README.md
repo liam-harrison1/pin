@@ -85,7 +85,18 @@ swift run DeskPinsPinningSmokeTests
 swift run DeskPinsWindowCatalogSmokeTests
 ```
 
+Important:
+
+- these are test executables only; they print pass/fail and exit
+- they do not launch the menu bar app and will not show a `Pins` icon
+
 ### 3. Launch the current menu bar shell
+
+```bash
+./Scripts/run-app.sh
+```
+
+Equivalent direct command:
 
 ```bash
 swift run DeskPinsMenuBarApp
