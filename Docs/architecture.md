@@ -67,6 +67,7 @@ Owns:
 - weak window identity and bounds snapshots
 - sort order policy
 - persistence
+- persisted snapshot schema and JSON file storage
 - invalidation state
 - pin, activate, observe, and unpin store operations
 

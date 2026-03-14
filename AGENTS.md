@@ -70,6 +70,7 @@ Do not:
 
 - `Medium/Large` tasks must use a dedicated branch or worktree.
 - Branch names must use the `codex/` prefix.
+- Prefer descriptive topic-based branch names over opaque version labels like `v1`, `v2`, or `v3`.
 - Recommended branch formats:
   - `codex/feat-<topic>`
   - `codex/fix-<topic>`

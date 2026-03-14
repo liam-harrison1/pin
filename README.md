@@ -19,6 +19,7 @@ This repository currently includes:
 - pin and unpin workflows for visible catalog entries
 - stale pinned-window reconciliation when a catalog refresh no longer matches an entry
 - a workspace coordinator that combines catalog state, focused-window state, and pinned-window state into a single refresh snapshot
+- JSON persistence for pinned-window store snapshots
 
 ## What Is Not Built Yet
 
@@ -26,7 +27,7 @@ The current branch does not yet include:
 
 - a runnable menu bar app shell
 - overlay badges or border rendering
-- persistent storage across launches
+- automatic app-shell restore wiring for persisted pinned windows
 - global hotkey registration
 - a finished Xcode app target
 
@@ -75,6 +76,7 @@ Expected result:
 ```bash
 swift run DeskPinsAccessibilitySmokeTests
 swift run DeskPinsPinnedSmokeTests
+swift run DeskPinsPinnedPersistenceSmokeTests
 swift run DeskPinsPinningSmokeTests
 swift run DeskPinsWindowCatalogSmokeTests
 ```
@@ -83,8 +85,29 @@ swift run DeskPinsWindowCatalogSmokeTests
 
 - `Core/Accessibility/`: Accessibility permission and focused-window reads
 - `Core/WindowCatalog/`: CoreGraphics window enumeration, filtering, and search
-- `Core/Pinned/`: pinned-window model, identity, ordering, and invalidation state
+- `Core/Pinned/`: pinned-window model, identity, ordering, invalidation state, and JSON persistence
 - `Core/Pinning/`: pinning workflows and workspace-level refresh coordination
+
+## Branch Guide
+
+Use descriptive branches rather than `v1`, `v2`, or `v3`.
+
+- `codex/feat-project-init`: earliest bootstrap history; kept for traceability, not the branch to continue on
+- `codex/feat-project-init-pr`: the stable review branch for the current bootstrap PR
+- `codex/feat-pinning-workspace-state`: a completed local feature branch that introduced the workspace coordinator and has already been folded forward
+- `codex/feat-pinned-store-persistence`: the branch that should continue receiving new implementation work now
+
+Branch naming format:
+
+- `codex/feat-<topic>` for new functionality
+- `codex/fix-<topic>` for bug fixes
+- `codex/refactor-<topic>` for internal restructuring
+
+Reason:
+
+- names stay tied to the actual purpose of the work
+- review is easier than opaque version labels
+- cross-thread branch prompts are easier to interpret
 
 ## Important Bootstrap Notes
 

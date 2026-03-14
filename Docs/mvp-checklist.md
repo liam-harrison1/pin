@@ -57,6 +57,7 @@
 - [ ] Validate Space and fullscreen degradation behavior.
 - [ ] Validate shortcut registration failure messaging.
 - [ ] Prepare signing and notarization notes.
+- [x] Add core pinned-window persistence that can be wired into later app startup and shutdown flows.
 
 ## Acceptance Checks
 
