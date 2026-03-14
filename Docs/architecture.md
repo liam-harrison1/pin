@@ -93,7 +93,7 @@ Owns:
 
 - pin badge presentation
 - floating pin-badge overlays that track pinned window bounds
-- mirrored pinned-content preview capture and rendering
+- mirrored pinned-content preview capture and rendering through per-window `SCStream` sessions with latest-frame caches
 - Screen Recording permission checks for content overlays
 - opacity and click-through behavior
 - z-order application for app-owned overlays

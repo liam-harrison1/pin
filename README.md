@@ -24,7 +24,7 @@ This repository currently includes:
 - JSON persistence for pinned-window store snapshots
 - a runnable menu bar app shell with pre-menu workspace capture, permission request, current-window pin toggle, visible-window pinning, per-window bring-forward and unpin actions, and continuous overlay refresh
 - a global shortcut for toggling the current focused window pin
-- a ScreenCaptureKit-backed content-overlay prototype on `codex/feat-screen-recording-overlay`
+- a ScreenCaptureKit-backed content-overlay prototype on `codex/feat-screen-recording-overlay` using per-window `SCStream` sessions and latest-frame caches
 
 ## What Is Not Built Yet
 
