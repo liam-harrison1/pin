@@ -3,6 +3,19 @@ import DeskPinsAccessibility
 import DeskPinsPinned
 import DeskPinsWindowCatalog
 
+public struct PinningWorkspaceFocusCapture: Sendable, Equatable {
+    public var status: PinningWorkspaceFocusStatus
+    public var focusedWindow: FocusedWindowSnapshot?
+
+    public init(
+        status: PinningWorkspaceFocusStatus,
+        focusedWindow: FocusedWindowSnapshot?
+    ) {
+        self.status = status
+        self.focusedWindow = focusedWindow
+    }
+}
+
 public enum PinningWorkspaceFocusStatus: Sendable, Equatable {
     case available
     case requiresAccessibilityPermission

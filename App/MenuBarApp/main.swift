@@ -28,13 +28,18 @@ enum DeskPinsMenuBarApp {
 }
 
 @MainActor
-private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate {
+private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(
         withLength: NSStatusItem.variableLength
     )
     private let menu = NSMenu()
     private let pinnedCountItem = NSMenuItem(title: "Pinned Windows: 0", action: nil, keyEquivalent: "")
     private let focusItem = NSMenuItem(title: "Focus: Not refreshed", action: nil, keyEquivalent: "")
+    private let noPinnedWindowsItem = NSMenuItem(
+        title: "No pinned windows yet",
+        action: nil,
+        keyEquivalent: ""
+    )
     private let refreshItem = NSMenuItem(
         title: "Refresh Workspace",
         action: #selector(refreshWorkspace),
@@ -57,13 +62,15 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     )
 
     private var stateController: LiveDeskPinsStateController?
+    private var shouldReopenMenuAfterRefresh = false
+    private var dynamicPinnedWindowItems: [NSMenuItem] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
 
         do {
             stateController = try makeStateController()
-            _ = try stateController?.refreshWorkspace()
+            _ = try stateController?.captureWorkspaceForMenu()
             updateMenuPresentation()
         } catch {
             updateMenuPresentation()
@@ -77,26 +84,19 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     private func configureStatusItem() {
         pinnedCountItem.isEnabled = false
         focusItem.isEnabled = false
+        noPinnedWindowsItem.isEnabled = false
 
+        menu.delegate = self
         refreshItem.target = self
         togglePinItem.target = self
         requestPermissionItem.target = self
         quitItem.target = self
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(openStatusMenu)
 
-        menu.items = [
-            pinnedCountItem,
-            focusItem,
-            .separator(),
-            refreshItem,
-            togglePinItem,
-            requestPermissionItem,
-            .separator(),
-            quitItem
-        ]
-
-        statusItem.menu = menu
         statusItem.button?.title = "Pins"
         statusItem.button?.toolTip = "DeskPins menu bar app"
+        rebuildMenu()
     }
 
     private func makeStateController() throws -> LiveDeskPinsStateController {
@@ -129,20 +129,25 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     }
 
     @objc
-    private func refreshWorkspace() {
+    private func openStatusMenu() {
         guard let stateController else {
+            statusItem.popUpMenu(menu)
             return
         }
 
         do {
-            _ = try stateController.refreshWorkspace()
+            _ = try stateController.captureWorkspaceForMenu()
             updateMenuPresentation()
         } catch {
-            presentAlert(
-                title: "Refresh failed",
-                message: error.localizedDescription
-            )
+            updateMenuPresentation()
         }
+
+        statusItem.popUpMenu(menu)
+    }
+
+    @objc
+    private func refreshWorkspace() {
+        shouldReopenMenuAfterRefresh = true
     }
 
     @objc
@@ -152,7 +157,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
         }
 
         do {
-            let outcome = try stateController.toggleCurrentWindow()
+            let outcome = try stateController.togglePresentedFocusedWindow()
             updateMenuPresentation()
 
             switch outcome {
@@ -186,6 +191,31 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     }
 
     @objc
+    private func unpinPinnedWindow(_ sender: NSMenuItem) {
+        guard let stateController,
+              let windowID = sender.representedObject as? UUID else {
+            return
+        }
+
+        do {
+            let removed = try stateController.unpinWindow(id: windowID)
+            updateMenuPresentation()
+
+            if let removed {
+                presentAlert(
+                    title: "Unpinned window",
+                    message: removed.windowTitle
+                )
+            }
+        } catch {
+            presentAlert(
+                title: "Unpin failed",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    @objc
     private func requestAccessibilityPermission() {
         guard let stateController else {
             return
@@ -211,6 +241,18 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     @objc
     private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard shouldReopenMenuAfterRefresh else {
+            return
+        }
+
+        shouldReopenMenuAfterRefresh = false
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            self?.openStatusMenu()
+        }
     }
 
     private func updateMenuPresentation() {
@@ -240,6 +282,53 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
         let buttonTitle = pinnedCount > 0 ? "Pins \(pinnedCount)" : "Pins"
         statusItem.button?.title = buttonTitle
         statusItem.button?.toolTip = "DeskPins: \(focusDescription)"
+        rebuildDynamicPinnedWindowItems(using: presentation)
+        rebuildMenu()
+    }
+
+    private func rebuildDynamicPinnedWindowItems(
+        using presentation: DeskPinsMenuBarPresentation?
+    ) {
+        dynamicPinnedWindowItems.removeAll()
+
+        let pinnedWindows = presentation?.pinnedWindows ?? []
+
+        guard !pinnedWindows.isEmpty else {
+            return
+        }
+
+        dynamicPinnedWindowItems = pinnedWindows.map { pinnedWindow in
+            let titlePrefix = pinnedWindow.isInvalidated ? "Unpin stale: " : "Unpin: "
+            let item = NSMenuItem(
+                title: "\(titlePrefix)\(pinnedWindow.title)",
+                action: #selector(unpinPinnedWindow(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = pinnedWindow.id
+            return item
+        }
+    }
+
+    private func rebuildMenu() {
+        menu.removeAllItems()
+        menu.items = [
+            pinnedCountItem,
+            focusItem
+        ]
+
+        if dynamicPinnedWindowItems.isEmpty {
+            menu.addItem(noPinnedWindowsItem)
+        } else {
+            dynamicPinnedWindowItems.forEach(menu.addItem(_:))
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(refreshItem)
+        menu.addItem(togglePinItem)
+        menu.addItem(requestPermissionItem)
+        menu.addItem(.separator())
+        menu.addItem(quitItem)
     }
 
     private func presentAlert(title: String, message: String) {

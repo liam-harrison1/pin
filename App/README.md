@@ -10,7 +10,9 @@ Current layout:
 The current shell is intentionally small:
 
 - status item in the macOS menu bar
+- pre-menu workspace capture so the menu can act on the last external focused window
 - actions for workspace refresh, accessibility permission request, and current-window pin toggle
+- direct unpin menu items for already pinned windows
 - JSON-backed pinned-window restore on startup
 
 Overlay windows, hotkeys, and richer settings are still future work.

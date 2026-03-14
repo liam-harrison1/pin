@@ -4,9 +4,21 @@ import DeskPinsPinning
 import DeskPinsPinned
 import DeskPinsWindowCatalog
 
+public struct DeskPinsMenuBarPinnedWindowItem: Sendable, Equatable, Identifiable {
+    public var id: UUID
+    public var title: String
+    public var isInvalidated: Bool
+
+    public init(id: UUID, title: String, isInvalidated: Bool) {
+        self.id = id
+        self.title = title
+        self.isInvalidated = isInvalidated
+    }
+}
+
 public struct DeskPinsMenuBarPresentation: Sendable, Equatable {
     public var pinnedCount: Int
-    public var pinnedTitles: [String]
+    public var pinnedWindows: [DeskPinsMenuBarPinnedWindowItem]
     public var accessibilityStatus: AccessibilityTrustStatus
     public var focusStatus: PinningWorkspaceFocusStatus?
     public var focusedWindowTitle: String?
@@ -14,14 +26,14 @@ public struct DeskPinsMenuBarPresentation: Sendable, Equatable {
 
     public init(
         pinnedCount: Int,
-        pinnedTitles: [String],
+        pinnedWindows: [DeskPinsMenuBarPinnedWindowItem],
         accessibilityStatus: AccessibilityTrustStatus,
         focusStatus: PinningWorkspaceFocusStatus?,
         focusedWindowTitle: String?,
         lastRefreshAt: Date?
     ) {
         self.pinnedCount = pinnedCount
-        self.pinnedTitles = pinnedTitles
+        self.pinnedWindows = pinnedWindows
         self.accessibilityStatus = accessibilityStatus
         self.focusStatus = focusStatus
         self.focusedWindowTitle = focusedWindowTitle
@@ -61,12 +73,23 @@ public final class DeskPinsMenuBarStateController<
         trustChecker.requestAccessIfNeeded()
     }
 
+    public func captureWorkspaceForMenu() throws -> PinningWorkspaceSnapshot {
+        let focusCapture = makeCoordinator().captureFocus()
+        return try refreshWorkspace(using: focusCapture)
+    }
+
     public func refreshWorkspace() throws -> PinningWorkspaceSnapshot {
-        let coordinator = PinningWorkspaceCoordinator(
-            catalogReader: catalogReader,
-            focusedWindowReader: focusedReader
+        try refreshWorkspace(using: nil)
+    }
+
+    public func refreshWorkspace(
+        using focusCapture: PinningWorkspaceFocusCapture?
+    ) throws -> PinningWorkspaceSnapshot {
+        let snapshot = try makeCoordinator().refresh(
+            store: &store,
+            focusCapture: focusCapture,
+            at: .now
         )
-        let snapshot = try coordinator.refresh(store: &store, at: .now)
         workspaceSnapshot = snapshot
         try persistStore()
         return snapshot
@@ -88,17 +111,88 @@ public final class DeskPinsMenuBarStateController<
         return outcome
     }
 
+    @discardableResult
+    public func togglePresentedFocusedWindow() throws -> PinCurrentWindowActionOutcome {
+        let focusCapture = currentFocusCapture() ?? makeCoordinator().captureFocus()
+
+        guard let focusedWindow = focusCapture.focusedWindow else {
+            return mapFocusStatusToOutcome(focusCapture.status)
+        }
+
+        let reference = focusedWindow.asPinnedReference()
+        let outcome: PinCurrentWindowActionOutcome
+
+        if let unpinned = store.unpin(reference: reference) {
+            outcome = .unpinned(unpinned)
+        } else {
+            let pinned = store.pin(reference: reference, at: .now)
+            outcome = .pinned(pinned)
+        }
+
+        try persistStore()
+        _ = try? refreshWorkspace(using: focusCapture)
+        return outcome
+    }
+
+    @discardableResult
+    public func unpinWindow(id: UUID) throws -> PinnedWindow? {
+        let removed = store.unpin(id: id)
+
+        guard removed != nil else {
+            return nil
+        }
+
+        try persistStore()
+        _ = try? refreshWorkspace(using: currentFocusCapture())
+        return removed
+    }
+
     public func presentation() -> DeskPinsMenuBarPresentation {
         let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
 
         return DeskPinsMenuBarPresentation(
             pinnedCount: orderedWindows.count,
-            pinnedTitles: orderedWindows.map(\.windowTitle),
+            pinnedWindows: orderedWindows.map { window in
+                DeskPinsMenuBarPinnedWindowItem(
+                    id: window.id,
+                    title: window.windowTitle,
+                    isInvalidated: window.isInvalidated
+                )
+            },
             accessibilityStatus: trustChecker.currentStatus(),
             focusStatus: workspaceSnapshot?.focusStatus,
             focusedWindowTitle: workspaceSnapshot?.focusedWindow?.effectiveTitle,
             lastRefreshAt: workspaceSnapshot?.refreshedAt
         )
+    }
+
+    private func makeCoordinator() -> PinningWorkspaceCoordinator<CatalogReader, FocusReader> {
+        PinningWorkspaceCoordinator(
+            catalogReader: catalogReader,
+            focusedWindowReader: focusedReader
+        )
+    }
+
+    private func currentFocusCapture() -> PinningWorkspaceFocusCapture? {
+        guard let workspaceSnapshot else {
+            return nil
+        }
+
+        return PinningWorkspaceFocusCapture(
+            status: workspaceSnapshot.focusStatus,
+            focusedWindow: workspaceSnapshot.focusedWindow
+        )
+    }
+
+    private func mapFocusStatusToOutcome(
+        _ status: PinningWorkspaceFocusStatus
+    ) -> PinCurrentWindowActionOutcome {
+        switch status {
+        case .available, .noFocusedWindow:
+            return .noFocusedWindow
+        case .requiresAccessibilityPermission:
+            return .requiresAccessibilityPermission
+        }
     }
 
     private func persistStore() throws {

@@ -21,7 +21,7 @@ This repository currently includes:
 - stale pinned-window reconciliation when a catalog refresh no longer matches an entry
 - a workspace coordinator that combines catalog state, focused-window state, and pinned-window state into a single refresh snapshot
 - JSON persistence for pinned-window store snapshots
-- a runnable menu bar app shell with refresh, permission request, and current-window pin toggle actions
+- a runnable menu bar app shell with pre-menu workspace capture, permission request, current-window pin toggle, and per-window unpin actions
 
 ## What Is Not Built Yet
 
@@ -92,7 +92,8 @@ swift run DeskPinsMenuBarApp
 What you should expect:
 
 - a `Pins` status item appears in the macOS menu bar
-- the menu offers refresh, accessibility permission request, and current-window pin toggle actions
+- the menu captures the external focused window before it opens, so pin actions work against the last real app window rather than the menu itself
+- the menu offers refresh, accessibility permission request, current-window pin toggle, and direct unpin actions for already pinned windows
 - pinned windows are saved to `~/Library/Application Support/DeskPins/PinnedWindows.json`
 
 Manual step you will likely need:

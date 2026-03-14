@@ -11,7 +11,8 @@ struct DeskPinsAppSupportSmokeTests {
     static func main() {
         do {
             try testControllerLoadsPersistedStoreAndRefreshesWorkspace()
-            try testControllerTogglePinsAndPersistsCurrentWindow()
+            try testControllerMenuCapturePreservesFocusForToggle()
+            try testControllerCanUnpinPersistedWindowByID()
             print("DeskPinsAppSupport smoke tests passed")
         } catch {
             fputs("App support smoke test failure: \(error)\n", stderr)
@@ -95,7 +96,7 @@ struct DeskPinsAppSupportSmokeTests {
     }
 
     @MainActor
-    private static func testControllerTogglePinsAndPersistsCurrentWindow() throws {
+    private static func testControllerMenuCapturePreservesFocusForToggle() throws {
         let tempRoot = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: tempRoot) }
 
@@ -116,28 +117,75 @@ struct DeskPinsAppSupportSmokeTests {
             persistence: persistence
         )
 
-        let outcome = try controller.toggleCurrentWindow()
+        _ = try controller.captureWorkspaceForMenu()
+        let outcome = try controller.togglePresentedFocusedWindow()
         let reloadedStore = try persistence.loadStore()
 
         switch outcome {
         case .pinned(let window):
             try expect(
                 window.windowTitle == "Spec",
-                message: "toggle should pin the focused window through the app controller"
+                message: "menu toggle should pin the last captured focused window"
             )
         case .unpinned, .requiresAccessibilityPermission, .noFocusedWindow:
             throw SmokeTestFailure(
-                message: "toggle should pin the focused window in the happy path"
+                message: "menu toggle should pin the focused window in the happy path"
             )
         }
 
         try expect(
             reloadedStore.count == 1,
-            message: "toggle should persist the updated pinned-window store"
+            message: "menu toggle should persist the updated pinned-window store"
         )
         try expect(
-            controller.presentation().pinnedTitles == ["Spec"],
+            controller.presentation().pinnedWindows.map(\.title) == ["Spec"],
             message: "presentation should surface the newly pinned window title"
+        )
+    }
+
+    @MainActor
+    private static func testControllerCanUnpinPersistedWindowByID() throws {
+        let tempRoot = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let fileURL = tempRoot.appendingPathComponent("PinnedStore.json")
+        let persistence = JSONPinnedWindowStorePersistence(fileURL: fileURL)
+        let pinnedWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 803,
+                windowTitle: "Pinned Tab",
+                windowNumber: 1003
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 14_000)
+        )
+        _ = try persistence.saveStore(
+            PinnedWindowStore(windows: [pinnedWindow]),
+            savedAt: Date(timeIntervalSince1970: 14_100)
+        )
+
+        let controller = try DeskPinsMenuBarStateController(
+            trustChecker: StaticAccessibilityTrustChecker(status: .trusted),
+            focusedReader: StaticFocusedWindowReader(
+                snapshot: FocusedWindowSnapshot(
+                    ownerPID: 900,
+                    applicationName: "Other App",
+                    windowTitle: "Unrelated"
+                )
+            ),
+            catalogReader: StaticWindowCatalogReader(catalog: WindowCatalog(entries: [])),
+            persistence: persistence
+        )
+
+        let removed = try controller.unpinWindow(id: pinnedWindow.id)
+        let reloadedStore = try persistence.loadStore()
+
+        try expect(
+            removed?.id == pinnedWindow.id,
+            message: "app controller should be able to unpin a persisted window by identifier"
+        )
+        try expect(
+            reloadedStore.isEmpty,
+            message: "unpinning from the menu should persist the updated empty store"
         )
     }
 
