@@ -113,6 +113,9 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private var activeOverlayDragSession: OverlayDragSession?
     private var dragFlushWorkItem: DispatchWorkItem?
     private let dragFlushInterval: TimeInterval = 1.0 / 60.0
+    private var isStatusMenuOpen = false
+    private var backgroundRefreshTick = 0
+    private let idleRefreshEveryNTicks = 4
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
@@ -359,6 +362,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        isStatusMenuOpen = false
         guard shouldReopenMenuAfterRefresh else {
             return
         }
@@ -368,6 +372,10 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             self?.openStatusMenu()
         }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        isStatusMenuOpen = true
     }
 
     private func updateMenuPresentation() {
@@ -500,7 +508,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private func startRefreshTimer() {
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(
-            withTimeInterval: 0.05,
+            withTimeInterval: 0.08,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -515,8 +523,19 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             return
         }
 
+        if activeOverlayDragSession != nil {
+            return
+        }
+
+        backgroundRefreshTick += 1
+        let isIdle = !isStatusMenuOpen
+            && stateController.presentation().pinnedCount == 0
+        if isIdle && (backgroundRefreshTick % idleRefreshEveryNTicks != 0) {
+            return
+        }
+
         do {
-            _ = try stateController.refreshWorkspace()
+            _ = try stateController.refreshWorkspaceUsingCachedFocus()
             updateMenuPresentation()
         } catch {
             updateMenuPresentation()
@@ -579,6 +598,21 @@ private extension DeskPinsMenuBarAppDelegate {
             overlayManager.endInteractionDrag(for: id)
             endActiveOverlayDragSession(commitPendingDrag: false)
             performBackgroundRefresh()
+        case .badgeClicked(let id, _):
+            endActiveOverlayDragSession(commitPendingDrag: false)
+            guard let stateController else {
+                return
+            }
+
+            do {
+                _ = try stateController.unpinWindow(id: id)
+                updateMenuPresentation()
+            } catch {
+                presentDeskPinsAlert(
+                    title: "Unpin failed",
+                    message: error.localizedDescription
+                )
+            }
         }
     }
 

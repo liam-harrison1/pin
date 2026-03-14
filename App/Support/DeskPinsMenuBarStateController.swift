@@ -102,6 +102,10 @@ public final class DeskPinsMenuBarStateController<
         try refreshWorkspace(using: nil)
     }
 
+    public func refreshWorkspaceUsingCachedFocus() throws -> PinningWorkspaceSnapshot {
+        try refreshWorkspace(using: currentFocusCapture())
+    }
+
     public func refreshWorkspace(
         using focusCapture: PinningWorkspaceFocusCapture?
     ) throws -> PinningWorkspaceSnapshot {
