@@ -234,6 +234,9 @@ public final class DeskPinsMenuBarStateController<
     public func overlayTargets() -> [PinnedWindowOverlayTarget] {
         let visibleEntries = workspaceSnapshot?.visibleEntries ?? []
         let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+        let frontmostPinnedWindowID = visibleEntries.compactMap { entry in
+            store.matchingWindow(for: entry.asPinnedReference())?.id
+        }.first
 
         return orderedWindows.compactMap { pinnedWindow in
             if let visibleEntry = visibleEntries.first(where: { entry in
@@ -249,6 +252,7 @@ public final class DeskPinsMenuBarStateController<
                         height: visibleEntry.bounds.height
                     ),
                     isStale: pinnedWindow.isInvalidated,
+                    shouldRenderPreview: pinnedWindow.id != frontmostPinnedWindowID,
                     reference: pinnedWindow.reference
                 )
             }
@@ -267,6 +271,7 @@ public final class DeskPinsMenuBarStateController<
                     height: bounds.height
                 ),
                 isStale: pinnedWindow.isInvalidated,
+                shouldRenderPreview: pinnedWindow.id != frontmostPinnedWindowID,
                 reference: pinnedWindow.reference
             )
         }
