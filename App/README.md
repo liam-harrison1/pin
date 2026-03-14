@@ -11,8 +11,12 @@ The current shell is intentionally small:
 
 - status item in the macOS menu bar
 - pre-menu workspace capture so the menu can act on the last external focused window
-- actions for workspace refresh, accessibility permission request, and current-window pin toggle
-- direct unpin menu items for already pinned windows
+- actions for workspace refresh, accessibility permission request, current-window pin toggle, and visible-window pinning
+- a separate action for requesting Screen Recording when the mirrored content overlay branch is in use
+- bring-forward and unpin menu items for already pinned windows
+- app-owned floating `📌` badges for pinned windows
+- on the Screen Recording branch, mirrored pinned-content overlays rendered above other apps
+- a global shortcut for toggling the current focused window pin
 - JSON-backed pinned-window restore on startup
 
-Overlay windows, hotkeys, and richer settings are still future work.
+Richer settings, overlay tuning, and a dedicated Xcode app target are still future work.

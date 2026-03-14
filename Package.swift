@@ -30,6 +30,7 @@ let package = Package(
             name: "DeskPinsAppSupport",
             dependencies: [
                 "DeskPinsAccessibility",
+                "DeskPinsOverlay",
                 "DeskPinsPinning",
                 "DeskPinsPinned",
                 "DeskPinsWindowCatalog"
@@ -48,6 +49,7 @@ let package = Package(
         ),
         .target(
             name: "DeskPinsOverlay",
+            dependencies: ["DeskPinsPinned"],
             path: "Core/Overlay"
         ),
         .target(
@@ -65,7 +67,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "DeskPinsMenuBarApp",
-            dependencies: ["DeskPinsAppSupport"],
+            dependencies: ["DeskPinsAppSupport", "DeskPinsHotKey"],
             path: "App/MenuBarApp"
         ),
         .executableTarget(

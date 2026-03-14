@@ -1,5 +1,6 @@
 import Foundation
 import DeskPinsAccessibility
+import DeskPinsOverlay
 import DeskPinsPinning
 import DeskPinsPinned
 import DeskPinsWindowCatalog
@@ -16,9 +17,22 @@ public struct DeskPinsMenuBarPinnedWindowItem: Sendable, Equatable, Identifiable
     }
 }
 
+public struct DeskPinsMenuBarVisibleWindowItem: Sendable, Equatable, Identifiable {
+    public var id: UUID
+    public var title: String
+    public var isPinned: Bool
+
+    public init(id: UUID, title: String, isPinned: Bool) {
+        self.id = id
+        self.title = title
+        self.isPinned = isPinned
+    }
+}
+
 public struct DeskPinsMenuBarPresentation: Sendable, Equatable {
     public var pinnedCount: Int
     public var pinnedWindows: [DeskPinsMenuBarPinnedWindowItem]
+    public var visibleWindows: [DeskPinsMenuBarVisibleWindowItem]
     public var accessibilityStatus: AccessibilityTrustStatus
     public var focusStatus: PinningWorkspaceFocusStatus?
     public var focusedWindowTitle: String?
@@ -27,6 +41,7 @@ public struct DeskPinsMenuBarPresentation: Sendable, Equatable {
     public init(
         pinnedCount: Int,
         pinnedWindows: [DeskPinsMenuBarPinnedWindowItem],
+        visibleWindows: [DeskPinsMenuBarVisibleWindowItem],
         accessibilityStatus: AccessibilityTrustStatus,
         focusStatus: PinningWorkspaceFocusStatus?,
         focusedWindowTitle: String?,
@@ -34,6 +49,7 @@ public struct DeskPinsMenuBarPresentation: Sendable, Equatable {
     ) {
         self.pinnedCount = pinnedCount
         self.pinnedWindows = pinnedWindows
+        self.visibleWindows = visibleWindows
         self.accessibilityStatus = accessibilityStatus
         self.focusStatus = focusStatus
         self.focusedWindowTitle = focusedWindowTitle
@@ -52,6 +68,7 @@ public final class DeskPinsMenuBarStateController<
     private let focusedReader: FocusReader
     private let catalogReader: CatalogReader
     private let persistence: Persistence
+    private let windowActivator: any WindowActivating
 
     public private(set) var store: PinnedWindowStore
     public private(set) var workspaceSnapshot: PinningWorkspaceSnapshot?
@@ -60,12 +77,14 @@ public final class DeskPinsMenuBarStateController<
         trustChecker: TrustChecker,
         focusedReader: FocusReader,
         catalogReader: CatalogReader,
-        persistence: Persistence
+        persistence: Persistence,
+        windowActivator: any WindowActivating = NoopWindowActivator()
     ) throws {
         self.trustChecker = trustChecker
         self.focusedReader = focusedReader
         self.catalogReader = catalogReader
         self.persistence = persistence
+        self.windowActivator = windowActivator
         self.store = try persistence.loadStore()
     }
 
@@ -119,7 +138,8 @@ public final class DeskPinsMenuBarStateController<
             return mapFocusStatusToOutcome(focusCapture.status)
         }
 
-        let reference = focusedWindow.asPinnedReference()
+        let reference = workspaceSnapshot?.focusedEntry?.asPinnedReference()
+            ?? focusedWindow.asPinnedReference()
         let outcome: PinCurrentWindowActionOutcome
 
         if let unpinned = store.unpin(reference: reference) {
@@ -147,8 +167,35 @@ public final class DeskPinsMenuBarStateController<
         return removed
     }
 
+    public func toggleVisibleWindow(id: UUID) throws -> PinCatalogWindowToggleResult? {
+        guard let entry = workspaceSnapshot?.visibleEntries.first(where: { $0.id == id }) else {
+            return nil
+        }
+
+        let service = PinCatalogWindowService()
+        let result = service.toggle(entry: entry, in: &store, at: .now)
+
+        try persistStore()
+        _ = try? refreshWorkspace(using: currentFocusCapture())
+        return result
+    }
+
+    @discardableResult
+    public func activatePinnedWindow(id: UUID) throws -> PinnedWindow? {
+        guard let window = store.window(id: id) else {
+            return nil
+        }
+
+        try windowActivator.activateWindow(reference: window.reference)
+        _ = store.markActivated(id: id, at: .now)
+        try persistStore()
+        _ = try? refreshWorkspace()
+        return store.window(id: id)
+    }
+
     public func presentation() -> DeskPinsMenuBarPresentation {
         let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+        let visibleEntries = workspaceSnapshot?.visibleEntries ?? []
 
         return DeskPinsMenuBarPresentation(
             pinnedCount: orderedWindows.count,
@@ -159,11 +206,59 @@ public final class DeskPinsMenuBarStateController<
                     isInvalidated: window.isInvalidated
                 )
             },
+            visibleWindows: visibleEntries.prefix(8).map { entry in
+                DeskPinsMenuBarVisibleWindowItem(
+                    id: entry.id,
+                    title: entry.effectiveTitle,
+                    isPinned: store.matchingWindow(for: entry.asPinnedReference()) != nil
+                )
+            },
             accessibilityStatus: trustChecker.currentStatus(),
             focusStatus: workspaceSnapshot?.focusStatus,
             focusedWindowTitle: workspaceSnapshot?.focusedWindow?.effectiveTitle,
             lastRefreshAt: workspaceSnapshot?.refreshedAt
         )
+    }
+
+    public func overlayTargets() -> [PinnedWindowOverlayTarget] {
+        let visibleEntries = workspaceSnapshot?.visibleEntries ?? []
+        let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+
+        return orderedWindows.compactMap { pinnedWindow in
+            if let visibleEntry = visibleEntries.first(where: { entry in
+                pinnedWindow.reference.likelyMatches(entry.asPinnedReference())
+            }) {
+                return PinnedWindowOverlayTarget(
+                    id: pinnedWindow.id,
+                    title: pinnedWindow.windowTitle,
+                    frame: CGRect(
+                        x: visibleEntry.bounds.x,
+                        y: visibleEntry.bounds.y,
+                        width: visibleEntry.bounds.width,
+                        height: visibleEntry.bounds.height
+                    ),
+                    isStale: pinnedWindow.isInvalidated,
+                    reference: pinnedWindow.reference
+                )
+            }
+
+            guard let bounds = pinnedWindow.bounds else {
+                return nil
+            }
+
+            return PinnedWindowOverlayTarget(
+                id: pinnedWindow.id,
+                title: pinnedWindow.windowTitle,
+                frame: CGRect(
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: bounds.width,
+                    height: bounds.height
+                ),
+                isStale: pinnedWindow.isInvalidated,
+                reference: pinnedWindow.reference
+            )
+        }
     }
 
     private func makeCoordinator() -> PinningWorkspaceCoordinator<CatalogReader, FocusReader> {

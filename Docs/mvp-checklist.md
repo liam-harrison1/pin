@@ -21,6 +21,8 @@
 - [x] Create a runnable menu bar app shell.
 - [x] Add Accessibility trust detection.
 - [x] Add a permission guidance entry in the UI.
+- [x] Add a global shortcut for toggling the current focused window pin.
+- [x] Add a Screen Recording permission request entry for the content-overlay branch.
 - [ ] Add basic app logging for startup and action failures.
 - [ ] Add a settings surface for shortcut and ordering behavior.
 
@@ -35,8 +37,9 @@
 
 ## Phase 3: Overlay and Ordering
 
-- [ ] Add pin badge feedback.
-- [ ] Add border or highlight overlay.
+- [x] Add pin badge feedback.
+- [x] Add a floating pin badge that follows pinned windows.
+- [x] Add a mirrored pinned-content overlay prototype behind Screen Recording permission.
 - [ ] Add ordering behavior based on recent interaction.
 - [ ] Add optional mode for recent pin priority.
 - [ ] Add opacity and click-through controls for pinned overlays.
@@ -62,8 +65,9 @@
 ## Acceptance Checks
 
 - [x] A user can pin the current window after granting Accessibility.
-- [ ] A user can pin a non-focused visible window from the window list.
+- [x] A user can pin a non-focused visible window from the window list.
 - [ ] Three to five pinned windows remain manageable without app instability.
 - [ ] The app never silently fails on missing permission.
 - [ ] No private API has entered the MVP path.
 - [ ] Local verification and CI use the same repository verification entry point.
+- [ ] Experimental content-overlay mode is usable after Screen Recording is granted.

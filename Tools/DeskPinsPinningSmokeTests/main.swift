@@ -16,6 +16,7 @@ struct DeskPinsPinningSmokeTests {
             try testAttemptPinMapsMissingPermissionToRecoverableOutcome()
             try testAttemptToggleMapsMissingFocusedWindowToRecoverableOutcome()
             try testReconcileInvalidatesPinnedWindowsMissingFromCatalog()
+            try testReconcileReconnectsWhenWindowNumberChanges()
             try testWorkspaceRefreshBuildsFocusedSnapshotAndPinnedMatch()
             try testWorkspaceRefreshMapsMissingPermissionWithoutDroppingCatalog()
             print("DeskPinsPinning smoke tests passed")
@@ -206,6 +207,50 @@ struct DeskPinsPinningSmokeTests {
         try expect(
             invalidatedReason == .noLongerMatched,
             message: "reconcile should record the noLongerMatched invalidation reason"
+        )
+    }
+
+    private static func testReconcileReconnectsWhenWindowNumberChanges() throws {
+        let pinnedWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 350,
+                windowTitle: "Notes",
+                windowNumber: 910,
+                bounds: PinnedWindowBounds(x: 120, y: 140, width: 900, height: 620)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 9_700)
+        )
+        var store = PinnedWindowStore(windows: [pinnedWindow])
+        let replacementEntry = WindowCatalogEntry(
+            frontToBackIndex: 0,
+            ownerPID: 350,
+            ownerName: "Notes",
+            windowTitle: "Notes",
+            windowNumber: 911,
+            layer: 0,
+            alpha: 1,
+            bounds: WindowCatalogBounds(x: 132, y: 146, width: 892, height: 618),
+            isOnScreen: true
+        )
+
+        let invalidated = PinnedWindowCatalogReconciler().reconcile(
+            store: &store,
+            against: WindowCatalog(entries: [replacementEntry]),
+            at: Date(timeIntervalSince1970: 9_750)
+        )
+
+        let reconnectedWindow = store.window(id: pinnedWindow.id)
+        try expect(
+            invalidated.isEmpty,
+            message: "reconcile should avoid stale invalidation when a moved window can still be weak-matched"
+        )
+        try expect(
+            reconnectedWindow?.windowNumber == 911,
+            message: "reconcile should refresh pinned reference identity when the source window number changes"
+        )
+        try expect(
+            reconnectedWindow?.isInvalidated == false,
+            message: "reconcile should clear stale state after reconnecting a pinned window"
         )
     }
 

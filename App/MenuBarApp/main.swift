@@ -2,6 +2,8 @@
 import Foundation
 import DeskPinsAccessibility
 import DeskPinsAppSupport
+import DeskPinsHotKey
+import DeskPinsOverlay
 import DeskPinsPinned
 import DeskPinsPinning
 import DeskPinsWindowCatalog
@@ -40,6 +42,16 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         action: nil,
         keyEquivalent: ""
     )
+    private let visibleWindowsHeaderItem = NSMenuItem(
+        title: "Visible Windows",
+        action: nil,
+        keyEquivalent: ""
+    )
+    private let noVisibleWindowsItem = NSMenuItem(
+        title: "No visible windows available",
+        action: nil,
+        keyEquivalent: ""
+    )
     private let refreshItem = NSMenuItem(
         title: "Refresh Workspace",
         action: #selector(refreshWorkspace),
@@ -55,41 +67,65 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         action: #selector(requestAccessibilityPermission),
         keyEquivalent: ""
     )
+    private let requestScreenRecordingItem = NSMenuItem(
+        title: "Request Screen Recording Permission",
+        action: #selector(requestScreenRecordingPermission),
+        keyEquivalent: ""
+    )
     private let quitItem = NSMenuItem(
         title: "Quit DeskPins",
         action: #selector(quit),
         keyEquivalent: "q"
     )
 
+    private let overlayManager = PinnedWindowOverlayManager()
     private var stateController: LiveDeskPinsStateController?
     private var shouldReopenMenuAfterRefresh = false
     private var dynamicPinnedWindowItems: [NSMenuItem] = []
+    private var dynamicVisibleWindowItems: [NSMenuItem] = []
+    private var refreshTimer: Timer?
+    private var signalSources: [DispatchSourceSignal] = []
+    private var hasTornDownUI = false
+    private var hotKeyController: DeskPinsGlobalHotKeyController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
+        installTerminationSignalHandlers()
 
         do {
             stateController = try makeStateController()
             _ = try stateController?.captureWorkspaceForMenu()
+            try installHotKeys()
             updateMenuPresentation()
+            startRefreshTimer()
         } catch {
             updateMenuPresentation()
-            presentAlert(
+            presentDeskPinsAlert(
                 title: "DeskPins failed to start cleanly",
                 message: error.localizedDescription
             )
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        teardownStatusUI()
+        hotKeyController?.unregisterAll()
+        hotKeyController = nil
+        cancelSignalHandlers()
+    }
+
     private func configureStatusItem() {
         pinnedCountItem.isEnabled = false
         focusItem.isEnabled = false
         noPinnedWindowsItem.isEnabled = false
+        visibleWindowsHeaderItem.isEnabled = false
+        noVisibleWindowsItem.isEnabled = false
 
         menu.delegate = self
         refreshItem.target = self
         togglePinItem.target = self
         requestPermissionItem.target = self
+        requestScreenRecordingItem.target = self
         quitItem.target = self
         statusItem.button?.target = self
         statusItem.button?.action = #selector(openStatusMenu)
@@ -99,39 +135,74 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         rebuildMenu()
     }
 
+    @objc
+    private func toggleVisibleWindow(_ sender: NSMenuItem) {
+        guard let stateController,
+              let windowID = sender.representedObject as? UUID else {
+            return
+        }
+
+        do {
+            let result = try stateController.toggleVisibleWindow(id: windowID)
+            updateMenuPresentation()
+
+            switch result {
+            case .pinned(let window):
+                presentDeskPinsAlert(
+                    title: "Pinned visible window",
+                    message: window.windowTitle
+                )
+            case .unpinned(let window):
+                presentDeskPinsAlert(
+                    title: "Unpinned visible window",
+                    message: window.windowTitle
+                )
+            case nil:
+                presentDeskPinsAlert(
+                    title: "Visible window not found",
+                    message: "Refresh the workspace and try again."
+                )
+            }
+        } catch {
+            presentDeskPinsAlert(
+                title: "Visible-window action failed",
+                message: error.localizedDescription
+            )
+        }
+    }
+
     private func makeStateController() throws -> LiveDeskPinsStateController {
         let trustChecker = LiveAccessibilityTrustChecker()
         let focusedReader = LiveFocusedWindowReader(trustChecker: trustChecker)
         let catalogReader = LiveWindowCatalogReader()
         let persistence = JSONPinnedWindowStorePersistence(
-            fileURL: try pinnedStoreFileURL()
+            fileURL: try deskPinsPinnedStoreFileURL()
         )
+        let windowActivator = LiveWindowActivator(trustChecker: trustChecker)
 
         return try LiveDeskPinsStateController(
             trustChecker: trustChecker,
             focusedReader: focusedReader,
             catalogReader: catalogReader,
-            persistence: persistence
+            persistence: persistence,
+            windowActivator: windowActivator
         )
     }
 
-    private func pinnedStoreFileURL() throws -> URL {
-        let appSupportURL = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-
-        return appSupportURL
-            .appendingPathComponent("DeskPins", isDirectory: true)
-            .appendingPathComponent("PinnedWindows.json")
+    private func installHotKeys() throws {
+        let controller = DeskPinsGlobalHotKeyController { [weak self] action in
+            Task { @MainActor [weak self] in
+                self?.handleHotKey(action)
+            }
+        }
+        try controller.registerDefaultHotKeys()
+        hotKeyController = controller
     }
 
     @objc
     private func openStatusMenu() {
         guard let stateController else {
-            statusItem.popUpMenu(menu)
+            presentStatusMenu()
             return
         }
 
@@ -142,49 +213,45 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             updateMenuPresentation()
         }
 
-        statusItem.popUpMenu(menu)
+        presentStatusMenu()
     }
 
     @objc
     private func refreshWorkspace() {
         shouldReopenMenuAfterRefresh = true
+        performBackgroundRefresh()
     }
 
     @objc
     private func toggleCurrentWindowPin() {
-        guard let stateController else {
+        performPinToggle(usePresentedFocus: true, showSuccessAlert: true)
+    }
+
+    @objc
+    private func revealPinnedWindow(_ sender: NSMenuItem) {
+        guard let stateController,
+              let windowID = sender.representedObject as? UUID else {
             return
         }
 
         do {
-            let outcome = try stateController.togglePresentedFocusedWindow()
+            let activatedWindow = try stateController.activatePinnedWindow(id: windowID)
             updateMenuPresentation()
 
-            switch outcome {
-            case .pinned(let window):
-                presentAlert(
-                    title: "Pinned current window",
-                    message: window.windowTitle
+            if let activatedWindow {
+                presentDeskPinsAlert(
+                    title: "Brought pinned window forward",
+                    message: activatedWindow.windowTitle
                 )
-            case .unpinned(let window):
-                presentAlert(
-                    title: "Unpinned current window",
-                    message: window.windowTitle
-                )
-            case .requiresAccessibilityPermission:
-                presentAlert(
-                    title: "Accessibility permission required",
-                    message: "Use the menu item to request permission, then retry pinning."
-                )
-            case .noFocusedWindow:
-                presentAlert(
-                    title: "No focused window",
-                    message: "Bring a normal app window to the front, then retry."
+            } else {
+                presentDeskPinsAlert(
+                    title: "Pinned window not found",
+                    message: "Refresh the workspace and try again."
                 )
             }
         } catch {
-            presentAlert(
-                title: "Pin action failed",
+            presentDeskPinsAlert(
+                title: "Bring-forward failed",
                 message: error.localizedDescription
             )
         }
@@ -202,13 +269,13 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             updateMenuPresentation()
 
             if let removed {
-                presentAlert(
+                presentDeskPinsAlert(
                     title: "Unpinned window",
                     message: removed.windowTitle
                 )
             }
         } catch {
-            presentAlert(
+            presentDeskPinsAlert(
                 title: "Unpin failed",
                 message: error.localizedDescription
             )
@@ -226,14 +293,32 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         switch status {
         case .trusted:
-            presentAlert(
+            presentDeskPinsAlert(
                 title: "Accessibility enabled",
                 message: "DeskPins can now read the focused window and refresh the workspace."
             )
         case .notTrusted:
-            presentAlert(
+            presentDeskPinsAlert(
                 title: "Grant Accessibility access",
                 message: "System Settings should prompt for permission. If it does not, add the app or terminal manually under Privacy & Security > Accessibility."
+            )
+        }
+    }
+
+    @objc
+    private func requestScreenRecordingPermission() {
+        let status = overlayManager.requestScreenRecordingPermission()
+
+        switch status {
+        case .granted:
+            presentDeskPinsAlert(
+                title: "Screen Recording enabled",
+                message: "DeskPins can now render pinned window content previews above other apps."
+            )
+        case .denied:
+            presentDeskPinsAlert(
+                title: "Grant Screen Recording access",
+                message: "Add the host app under Privacy & Security > Screen Recording, then relaunch DeskPins if needed."
             )
         }
     }
@@ -283,7 +368,9 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         statusItem.button?.title = buttonTitle
         statusItem.button?.toolTip = "DeskPins: \(focusDescription)"
         rebuildDynamicPinnedWindowItems(using: presentation)
+        rebuildDynamicVisibleWindowItems(using: presentation)
         rebuildMenu()
+        updateOverlays()
     }
 
     private func rebuildDynamicPinnedWindowItems(
@@ -297,15 +384,49 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             return
         }
 
-        dynamicPinnedWindowItems = pinnedWindows.map { pinnedWindow in
-            let titlePrefix = pinnedWindow.isInvalidated ? "Unpin stale: " : "Unpin: "
-            let item = NSMenuItem(
-                title: "\(titlePrefix)\(pinnedWindow.title)",
+        dynamicPinnedWindowItems = pinnedWindows.flatMap { pinnedWindow in
+            let revealPrefix = pinnedWindow.isInvalidated ? "Reveal stale: " : "Reveal pinned: "
+            let revealItem = NSMenuItem(
+                title: "\(revealPrefix)\(pinnedWindow.title)",
+                action: #selector(revealPinnedWindow(_:)),
+                keyEquivalent: ""
+            )
+            revealItem.target = self
+            revealItem.representedObject = pinnedWindow.id
+
+            let unpinPrefix = pinnedWindow.isInvalidated ? "Unpin stale: " : "Unpin: "
+            let unpinItem = NSMenuItem(
+                title: "\(unpinPrefix)\(pinnedWindow.title)",
                 action: #selector(unpinPinnedWindow(_:)),
                 keyEquivalent: ""
             )
+            unpinItem.target = self
+            unpinItem.representedObject = pinnedWindow.id
+
+            return [revealItem, unpinItem]
+        }
+    }
+
+    private func rebuildDynamicVisibleWindowItems(
+        using presentation: DeskPinsMenuBarPresentation?
+    ) {
+        dynamicVisibleWindowItems.removeAll()
+
+        let visibleWindows = presentation?.visibleWindows ?? []
+
+        guard !visibleWindows.isEmpty else {
+            return
+        }
+
+        dynamicVisibleWindowItems = visibleWindows.map { window in
+            let prefix = window.isPinned ? "Unpin visible: " : "Pin visible: "
+            let item = NSMenuItem(
+                title: "\(prefix)\(window.title)",
+                action: #selector(toggleVisibleWindow(_:)),
+                keyEquivalent: ""
+            )
             item.target = self
-            item.representedObject = pinnedWindow.id
+            item.representedObject = window.id
             return item
         }
     }
@@ -324,20 +445,191 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         }
 
         menu.addItem(.separator())
+        menu.addItem(visibleWindowsHeaderItem)
+
+        if dynamicVisibleWindowItems.isEmpty {
+            menu.addItem(noVisibleWindowsItem)
+        } else {
+            dynamicVisibleWindowItems.forEach(menu.addItem(_:))
+        }
+
+        menu.addItem(.separator())
         menu.addItem(refreshItem)
         menu.addItem(togglePinItem)
         menu.addItem(requestPermissionItem)
+        menu.addItem(requestScreenRecordingItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
     }
 
-    private func presentAlert(title: String, message: String) {
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .informational
-        alert.runModal()
+    private func updateOverlays() {
+        let targets = stateController?.overlayTargets() ?? []
+        overlayManager.updateOverlays(with: targets)
     }
+
+    private func startRefreshTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(
+            withTimeInterval: 0.1,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.performBackgroundRefresh()
+            }
+        }
+        refreshTimer?.tolerance = 0.2
+    }
+
+    private func performBackgroundRefresh() {
+        guard let stateController else {
+            return
+        }
+
+        do {
+            _ = try stateController.refreshWorkspace()
+            updateMenuPresentation()
+        } catch {
+            updateMenuPresentation()
+        }
+    }
+
+    private func installTerminationSignalHandlers() {
+        let signals = [SIGINT, SIGTERM, SIGHUP, SIGTSTP]
+
+        signalSources = signals.map { signalNumber in
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(
+                signal: signalNumber,
+                queue: .main
+            )
+            source.setEventHandler { [weak self] in
+                self?.handleTerminationSignal()
+            }
+            source.resume()
+            return source
+        }
+    }
+}
+
+private extension DeskPinsMenuBarAppDelegate {
+    func handleHotKey(_ action: DeskPinsHotKeyAction) {
+        switch action {
+        case .toggleCurrentWindowPin:
+            performPinToggle(usePresentedFocus: false, showSuccessAlert: false)
+        }
+    }
+
+    func performPinToggle(
+        usePresentedFocus: Bool,
+        showSuccessAlert: Bool
+    ) {
+        guard let stateController else {
+            return
+        }
+
+        do {
+            let outcome = usePresentedFocus
+                ? try stateController.togglePresentedFocusedWindow()
+                : try stateController.toggleCurrentWindow()
+            updateMenuPresentation()
+            presentPinOutcome(
+                outcome,
+                showSuccessAlert: showSuccessAlert
+            )
+        } catch {
+            presentDeskPinsAlert(
+                title: "Pin action failed",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func presentPinOutcome(
+        _ outcome: PinCurrentWindowActionOutcome,
+        showSuccessAlert: Bool
+    ) {
+        switch outcome {
+        case .pinned(let window):
+            guard showSuccessAlert else {
+                return
+            }
+            presentDeskPinsAlert(
+                title: "Pinned current window",
+                message: window.windowTitle
+            )
+        case .unpinned(let window):
+            guard showSuccessAlert else {
+                return
+            }
+            presentDeskPinsAlert(
+                title: "Unpinned current window",
+                message: window.windowTitle
+            )
+        case .requiresAccessibilityPermission:
+            presentDeskPinsAlert(
+                title: "Accessibility permission required",
+                message: "Use the menu item to request permission, then retry pinning."
+            )
+        case .noFocusedWindow:
+            presentDeskPinsAlert(
+                title: "No focused window",
+                message: "Bring a normal app window to the front, then retry."
+            )
+        }
+    }
+
+    func presentStatusMenu() {
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    func handleTerminationSignal() {
+        teardownStatusUI()
+        cancelSignalHandlers()
+        NSApplication.shared.terminate(nil)
+    }
+
+    func teardownStatusUI() {
+        guard !hasTornDownUI else {
+            return
+        }
+
+        hasTornDownUI = true
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        menu.cancelTracking()
+        statusItem.menu = nil
+        overlayManager.removeAllOverlays()
+        NSStatusBar.system.removeStatusItem(statusItem)
+    }
+
+    func cancelSignalHandlers() {
+        signalSources.forEach { $0.cancel() }
+        signalSources.removeAll()
+    }
+}
+
+private func deskPinsPinnedStoreFileURL() throws -> URL {
+    let appSupportURL = try FileManager.default.url(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask,
+        appropriateFor: nil,
+        create: true
+    )
+
+    return appSupportURL
+        .appendingPathComponent("DeskPins", isDirectory: true)
+        .appendingPathComponent("PinnedWindows.json")
+}
+
+@MainActor
+private func presentDeskPinsAlert(title: String, message: String) {
+    NSApp.activate(ignoringOtherApps: true)
+
+    let alert = NSAlert()
+    alert.messageText = title
+    alert.informativeText = message
+    alert.alertStyle = .informational
+    alert.runModal()
 }
