@@ -2,12 +2,18 @@
 import Foundation
 import DeskPinsPinned
 // swiftlint:disable file_length
+public enum PinnedWindowOverlayRenderPolicy: Sendable, Equatable {
+    case mirrorVisible
+    case directInteractionOwner
+    case suppressed
+}
+
 public struct PinnedWindowOverlayTarget: Sendable, Equatable, Identifiable {
     public var id: UUID
     public var title: String
     public var frame: CGRect
     public var isStale: Bool
-    public var shouldRenderPreview: Bool
+    public var renderPolicy: PinnedWindowOverlayRenderPolicy
     public var reference: PinnedWindowReference
 
     public init(
@@ -15,14 +21,14 @@ public struct PinnedWindowOverlayTarget: Sendable, Equatable, Identifiable {
         title: String,
         frame: CGRect,
         isStale: Bool,
-        shouldRenderPreview: Bool = true,
+        renderPolicy: PinnedWindowOverlayRenderPolicy = .mirrorVisible,
         reference: PinnedWindowReference
     ) {
         self.id = id
         self.title = title
         self.frame = frame
         self.isStale = isStale
-        self.shouldRenderPreview = shouldRenderPreview
+        self.renderPolicy = renderPolicy
         self.reference = reference
     }
 }
@@ -137,9 +143,11 @@ public final class PinnedWindowOverlayManager {
         let requiresFrontReorder = desiredTargetOrder != currentTargetOrder
         let screenRecordingStatus = permissionChecker.currentStatus()
         let topTargetID = desiredTargetOrder.first
-        let hasPreviewTarget = targets.contains(where: \.shouldRenderPreview)
+        let hasVisiblePreviewTarget = targets.contains { target in
+            target.renderPolicy == .mirrorVisible
+        }
 
-        if screenRecordingStatus != .granted || !hasPreviewTarget {
+        if screenRecordingStatus != .granted || targets.isEmpty {
             if !arePreviewCapturesSuppressed {
                 arePreviewCapturesSuppressed = true
                 Task { [previewCapturer] in
@@ -147,7 +155,7 @@ public final class PinnedWindowOverlayManager {
                 }
             }
         } else {
-            arePreviewCapturesSuppressed = false
+            arePreviewCapturesSuppressed = !hasVisiblePreviewTarget
         }
 
         for id in bundlesByID.keys where !targetIDs.contains(id) {
@@ -178,14 +186,27 @@ public final class PinnedWindowOverlayManager {
                 bundle = newBundle
             }
 
-            if !target.shouldRenderPreview {
+            switch target.renderPolicy {
+            case .directInteractionOwner:
                 cancelCapture(for: target.id)
                 bundle.enterDirectInteractionMode()
                 bundle.orderFrontIfNeeded(
                     force: requiresFrontReorder,
-                    includePreview: false
+                    includePreview: false,
+                    includeControls: true
                 )
                 continue
+            case .suppressed:
+                cancelCapture(for: target.id)
+                bundle.enterSuppressedMode()
+                bundle.orderFrontIfNeeded(
+                    force: requiresFrontReorder,
+                    includePreview: false,
+                    includeControls: false
+                )
+                continue
+            case .mirrorVisible:
+                break
             }
 
             refreshPreviewIfNeeded(
@@ -199,7 +220,8 @@ public final class PinnedWindowOverlayManager {
             )
             bundle.orderFrontIfNeeded(
                 force: requiresFrontReorder,
-                includePreview: true
+                includePreview: true,
+                includeControls: true
             )
         }
 
@@ -229,7 +251,7 @@ public final class PinnedWindowOverlayManager {
         refreshInterval: TimeInterval,
         isInteractionActive: Bool
     ) {
-        bundle.restoreAfterDirectInteraction()
+        bundle.restoreAfterInteractionSuppression()
 
         if isInteractionActive {
             cancelCapture(for: target.id)
@@ -366,12 +388,18 @@ public final class PinnedWindowOverlayManager {
 
 @MainActor
 private final class PinnedOverlayBundle {
+    private enum InteractionMode {
+        case mirror
+        case directOwner
+        case suppressed
+    }
+
     private let previewWindow: PinnedPreviewWindow
     private let dragHandleWindow: PinnedDragHandleWindow
     private let badgeWindow: PinnedBadgeWindow
     private var lastPreviewRequestAt: Date?
     private var lastPreviewIdentity: PinnedPreviewIdentity?
-    private var isInDirectInteractionMode = false
+    private var interactionMode: InteractionMode = .mirror
 
     init(
         target: PinnedWindowOverlayTarget,
@@ -405,14 +433,20 @@ private final class PinnedOverlayBundle {
         )
     }
 
-    func orderFrontIfNeeded(force: Bool, includePreview: Bool) {
+    func orderFrontIfNeeded(
+        force: Bool,
+        includePreview: Bool,
+        includeControls: Bool
+    ) {
         let previewVisibilityNeedsUpdate = includePreview
             ? !previewWindow.isVisible
             : previewWindow.isVisible
+        let controlVisibilityNeedsUpdate = includeControls
+            ? (!dragHandleWindow.isVisible || !badgeWindow.isVisible)
+            : (dragHandleWindow.isVisible || badgeWindow.isVisible)
         guard force
                 || previewVisibilityNeedsUpdate
-                || !dragHandleWindow.isVisible
-                || !badgeWindow.isVisible else {
+                || controlVisibilityNeedsUpdate else {
             return
         }
 
@@ -421,8 +455,13 @@ private final class PinnedOverlayBundle {
         } else {
             previewWindow.orderOut(nil)
         }
-        dragHandleWindow.orderFrontRegardless()
-        badgeWindow.orderFrontRegardless()
+        if includeControls {
+            dragHandleWindow.orderFrontRegardless()
+            badgeWindow.orderFrontRegardless()
+        } else {
+            dragHandleWindow.orderOut(nil)
+            badgeWindow.orderOut(nil)
+        }
     }
 
     func close() {
@@ -491,19 +530,30 @@ private final class PinnedOverlayBundle {
     }
 
     func enterDirectInteractionMode() {
-        guard !isInDirectInteractionMode else {
+        guard interactionMode != .directOwner else {
             return
         }
-        isInDirectInteractionMode = true
+        interactionMode = .directOwner
         previewWindow.orderOut(nil)
         dragHandleWindow.setDirectInteractionMode(true)
     }
 
-    func restoreAfterDirectInteraction() {
-        guard isInDirectInteractionMode else {
+    func enterSuppressedMode() {
+        guard interactionMode != .suppressed else {
             return
         }
-        isInDirectInteractionMode = false
+        interactionMode = .suppressed
+        previewWindow.orderOut(nil)
+        dragHandleWindow.orderOut(nil)
+        badgeWindow.orderOut(nil)
+        dragHandleWindow.setDirectInteractionMode(false)
+    }
+
+    func restoreAfterInteractionSuppression() {
+        guard interactionMode != .mirror else {
+            return
+        }
+        interactionMode = .mirror
         dragHandleWindow.setDirectInteractionMode(false)
     }
 
@@ -601,13 +651,18 @@ private final class PinnedPreviewWindow: NSPanel {
 @MainActor
 private final class PinnedDragHandleWindow: NSPanel {
     private let dragHandleView = PinnedDragHandleView(frame: .zero)
+    private var currentTarget: PinnedWindowOverlayTarget?
+    private var isInDirectInteractionMode = false
 
     init(
         target: PinnedWindowOverlayTarget,
         interactionHandler: PinnedWindowOverlayInteractionHandler?
     ) {
         super.init(
-            contentRect: Self.dragHandleFrame(for: target),
+            contentRect: Self.dragHandleFrame(
+                for: target,
+                directInteractionMode: false
+            ),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -631,8 +686,12 @@ private final class PinnedDragHandleWindow: NSPanel {
         target: PinnedWindowOverlayTarget,
         updateFrame: Bool = true
     ) {
+        currentTarget = target
         if updateFrame {
-            let frame = Self.dragHandleFrame(for: target)
+            let frame = Self.dragHandleFrame(
+                for: target,
+                directInteractionMode: isInDirectInteractionMode
+            )
             if !framesApproximatelyEqual(frame, self.frame) {
                 setFrame(frame, display: false)
             }
@@ -643,13 +702,42 @@ private final class PinnedDragHandleWindow: NSPanel {
         dragHandleView.setInteractionHandler(interactionHandler)
     }
     func setDirectInteractionMode(_ isEnabled: Bool) {
+        guard isInDirectInteractionMode != isEnabled else {
+            return
+        }
+        isInDirectInteractionMode = isEnabled
         dragHandleView.setDirectInteractionMode(isEnabled)
+        guard let currentTarget else {
+            return
+        }
+        let frame = Self.dragHandleFrame(
+            for: currentTarget,
+            directInteractionMode: isEnabled
+        )
+        if !framesApproximatelyEqual(frame, self.frame) {
+            setFrame(frame, display: false)
+        }
     }
     func shiftBy(deltaX: CGFloat, deltaY: CGFloat) {
         setFrame(frame.offsetBy(dx: deltaX, dy: deltaY), display: false)
     }
-    private static func dragHandleFrame(for target: PinnedWindowOverlayTarget) -> CGRect {
-        PinnedOverlayCoordinateSpace.appKitFrame(from: target.frame).integral
+    private static func dragHandleFrame(
+        for target: PinnedWindowOverlayTarget,
+        directInteractionMode: Bool
+    ) -> CGRect {
+        let fullFrame = PinnedOverlayCoordinateSpace.appKitFrame(from: target.frame).integral
+        guard directInteractionMode else {
+            return fullFrame
+        }
+
+        let railHeight = min(42, max(26, fullFrame.height * 0.14))
+        let sideInset = min(16, max(6, fullFrame.width * 0.03))
+        return CGRect(
+            x: fullFrame.minX + sideInset,
+            y: fullFrame.maxY - railHeight,
+            width: max(0, fullFrame.width - (sideInset * 2)),
+            height: railHeight
+        ).integral
     }
 }
 
@@ -685,15 +773,14 @@ private final class PinnedDragHandleView: NSView {
         guard bounds.contains(point) else {
             return nil
         }
-        let zone = pointerZone(for: point)
         if isInDirectInteractionMode {
-            return zone == .drag ? self : nil
+            return self
         }
         return self
     }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        let zone = pointerZone(for: point)
+        let zone: PointerZone = isInDirectInteractionMode ? .drag : pointerZone(for: point)
         activePointerZone = zone
         guard let target else {
             return
