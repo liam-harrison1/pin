@@ -73,7 +73,9 @@ public final class DeskPinsMenuBarStateController<
     public private(set) var store: PinnedWindowStore
     public private(set) var workspaceSnapshot: PinningWorkspaceSnapshot?
     private var lastFrontmostPinnedWindowID: UUID?
-    private var directInteractionPinnedWindowID: UUID?
+    private var overlayLeaseOwnerID: UUID?
+    private var isOverlayLeaseActive = false
+    private var suppressedPinnedWindowIDs: Set<UUID> = []
 
     public init(
         trustChecker: TrustChecker,
@@ -99,13 +101,31 @@ public final class DeskPinsMenuBarStateController<
         return try refreshWorkspace(using: focusCapture)
     }
 
-    public func setDirectInteractionPinnedWindow(id: UUID?) {
-        guard let id else {
-            directInteractionPinnedWindowID = nil
+    public func setOverlayInteractionLease(
+        ownerID: UUID?,
+        active: Bool,
+        suppressedWindowIDs: Set<UUID>
+    ) {
+        guard let ownerID, store.window(id: ownerID) != nil else {
+            overlayLeaseOwnerID = nil
+            isOverlayLeaseActive = false
+            suppressedPinnedWindowIDs.removeAll()
             return
         }
 
-        directInteractionPinnedWindowID = store.window(id: id) == nil ? nil : id
+        overlayLeaseOwnerID = ownerID
+        isOverlayLeaseActive = active
+        suppressedPinnedWindowIDs = Set(
+            suppressedWindowIDs.filter { id in
+                id != ownerID && store.window(id: id) != nil
+            }
+        )
+    }
+
+    public func clearOverlayInteractionLease() {
+        overlayLeaseOwnerID = nil
+        isOverlayLeaseActive = false
+        suppressedPinnedWindowIDs.removeAll()
     }
 
     public func focusedPinnedWindowID() -> UUID? {
@@ -210,6 +230,18 @@ public final class DeskPinsMenuBarStateController<
     }
 
     @discardableResult
+    public func markPinnedWindowInteracted(
+        id: UUID,
+        at date: Date = .now
+    ) -> PinnedWindow? {
+        let activated = store.markActivated(id: id, at: date)
+        if activated != nil {
+            try? persistStore()
+        }
+        return activated
+    }
+
+    @discardableResult
     public func activatePinnedWindow(id: UUID) throws -> PinnedWindow? {
         guard let window = store.window(id: id) else {
             return nil
@@ -254,7 +286,7 @@ public final class DeskPinsMenuBarStateController<
         let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
 
         return orderedWindows.compactMap { pinnedWindow in
-            let shouldRenderPreview = pinnedWindow.id != directInteractionPinnedWindowID
+            let renderPolicy = overlayRenderPolicy(for: pinnedWindow.id)
             if let visibleEntry = visibleEntries.first(where: { entry in
                 pinnedWindow.reference.likelyMatches(entry.asPinnedReference())
             }) {
@@ -268,7 +300,7 @@ public final class DeskPinsMenuBarStateController<
                         height: visibleEntry.bounds.height
                     ),
                     isStale: pinnedWindow.isInvalidated,
-                    shouldRenderPreview: shouldRenderPreview,
+                    renderPolicy: renderPolicy,
                     reference: pinnedWindow.reference
                 )
             }
@@ -287,10 +319,34 @@ public final class DeskPinsMenuBarStateController<
                     height: bounds.height
                 ),
                 isStale: pinnedWindow.isInvalidated,
-                shouldRenderPreview: shouldRenderPreview,
+                renderPolicy: renderPolicy,
                 reference: pinnedWindow.reference
             )
         }
+    }
+
+    public func overlappingPinnedWindowIDs(for id: UUID) -> Set<UUID> {
+        let visibleEntries = workspaceSnapshot?.visibleEntries ?? []
+        let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+
+        guard let owner = orderedWindows.first(where: { $0.id == id }),
+              let ownerFrame = frameForPinnedWindow(owner, visibleEntries: visibleEntries) else {
+            return []
+        }
+
+        let overlapInsets: CGFloat = 1
+        let matchFrame = ownerFrame.insetBy(dx: -overlapInsets, dy: -overlapInsets)
+        var overlappingIDs: Set<UUID> = []
+
+        for window in orderedWindows where window.id != id {
+            guard let frame = frameForPinnedWindow(window, visibleEntries: visibleEntries),
+                  frame.intersects(matchFrame) else {
+                continue
+            }
+            overlappingIDs.insert(window.id)
+        }
+
+        return overlappingIDs
     }
 
     private func makeCoordinator() -> PinningWorkspaceCoordinator<CatalogReader, FocusReader> {
@@ -340,6 +396,45 @@ public final class DeskPinsMenuBarStateController<
         }
 
         _ = store.markActivated(id: frontmostPinnedWindowID, at: date)
+    }
+
+    private func overlayRenderPolicy(for id: UUID) -> PinnedWindowOverlayRenderPolicy {
+        if suppressedPinnedWindowIDs.contains(id) {
+            return .suppressed
+        }
+
+        if isOverlayLeaseActive, overlayLeaseOwnerID == id {
+            return .directInteractionOwner
+        }
+
+        return .mirrorVisible
+    }
+
+    private func frameForPinnedWindow(
+        _ pinnedWindow: PinnedWindow,
+        visibleEntries: [WindowCatalogEntry]
+    ) -> CGRect? {
+        if let visibleEntry = visibleEntries.first(where: { entry in
+            pinnedWindow.reference.likelyMatches(entry.asPinnedReference())
+        }) {
+            return CGRect(
+                x: visibleEntry.bounds.x,
+                y: visibleEntry.bounds.y,
+                width: visibleEntry.bounds.width,
+                height: visibleEntry.bounds.height
+            )
+        }
+
+        guard let bounds = pinnedWindow.bounds else {
+            return nil
+        }
+
+        return CGRect(
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height
+        )
     }
 
     private func persistStore() throws {

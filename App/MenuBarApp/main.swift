@@ -8,6 +8,7 @@ import DeskPinsPinned
 import DeskPinsPinning
 import DeskPinsWindowCatalog
 
+// swiftlint:disable file_length
 typealias LiveDeskPinsStateController = DeskPinsMenuBarStateController<
     LiveAccessibilityTrustChecker,
     LiveFocusedWindowReader,
@@ -29,8 +30,15 @@ enum DeskPinsMenuBarApp {
     }
 }
 
+// swiftlint:disable type_body_length
 @MainActor
 private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private enum OverlayInteractionLeaseMode: Equatable {
+        case none
+        case acquiring(ownerID: UUID)
+        case active(ownerID: UUID)
+    }
+
     private struct OverlayDragSession {
         var pinnedWindowID: UUID
         var reference: PinnedWindowReference
@@ -116,7 +124,9 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private let dragFlushInterval: TimeInterval = 1.0 / 60.0
     private let postDragRefreshDelay: TimeInterval = 0.06
     private var isStatusMenuOpen = false
-    private var directInteractionPinnedWindowID: UUID?
+    private var overlayInteractionLeaseMode: OverlayInteractionLeaseMode = .none
+    private var suppressedLeaseWindowIDs: Set<UUID> = []
+    private var leaseHandshakeTask: Task<Void, Never>?
     private var backgroundRefreshTick = 0
     private let idleRefreshEveryNTicks = 4
 
@@ -141,6 +151,8 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        leaseHandshakeTask?.cancel()
+        leaseHandshakeTask = nil
         endActiveOverlayDragSession(commitPendingDrag: false)
         teardownStatusUI()
         hotKeyController?.unregisterAll()
@@ -244,7 +256,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         do {
             _ = try stateController.captureWorkspaceForMenu()
-            reconcileDirectInteractionMode()
+            reconcileOverlayInteractionLeaseMode()
             updateMenuPresentation()
         } catch {
             updateMenuPresentation()
@@ -505,8 +517,38 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     private func updateOverlays() {
+        applyOverlayInteractionLeaseToStateController()
         let targets = stateController?.overlayTargets() ?? []
         overlayManager.updateOverlays(with: targets)
+    }
+
+    private func updateOverlaysOnly() {
+        applyOverlayInteractionLeaseToStateController()
+        let targets = stateController?.overlayTargets() ?? []
+        overlayManager.updateOverlays(with: targets)
+    }
+
+    private func applyOverlayInteractionLeaseToStateController() {
+        guard let stateController else {
+            return
+        }
+
+        switch overlayInteractionLeaseMode {
+        case .none:
+            stateController.clearOverlayInteractionLease()
+        case .acquiring(let ownerID):
+            stateController.setOverlayInteractionLease(
+                ownerID: ownerID,
+                active: false,
+                suppressedWindowIDs: suppressedLeaseWindowIDs
+            )
+        case .active(let ownerID):
+            stateController.setOverlayInteractionLease(
+                ownerID: ownerID,
+                active: true,
+                suppressedWindowIDs: suppressedLeaseWindowIDs
+            )
+        }
     }
 
     private func startRefreshTimer() {
@@ -540,10 +582,18 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         do {
             _ = try stateController.refreshWorkspaceUsingCachedFocus()
-            reconcileDirectInteractionMode()
-            updateMenuPresentation()
+            reconcileOverlayInteractionLeaseMode()
+            if isStatusMenuOpen {
+                updateMenuPresentation()
+            } else {
+                updateOverlaysOnly()
+            }
         } catch {
-            updateMenuPresentation()
+            if isStatusMenuOpen {
+                updateMenuPresentation()
+            } else {
+                updateOverlaysOnly()
+            }
         }
     }
 
@@ -564,6 +614,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         }
     }
 }
+// swiftlint:enable type_body_length
 
 private extension DeskPinsMenuBarAppDelegate {
     func configureOverlayInteractionHandler() {
@@ -577,15 +628,15 @@ private extension DeskPinsMenuBarAppDelegate {
         case .dragBegan(let id, let reference):
             postDragRefreshWorkItem?.cancel()
             postDragRefreshWorkItem = nil
-            clearDirectInteractionMode()
+            clearOverlayInteractionLeaseMode()
             guard let stateController else {
                 return
             }
 
-            do {
-                _ = try stateController.activatePinnedWindow(id: id)
-                updateMenuPresentation()
-            } catch {}
+            _ = stateController.markPinnedWindowInteracted(id: id)
+            updateOverlaysOnly()
+            _ = try? stateController.activatePinnedWindow(id: id)
+            updateOverlaysOnly()
 
             beginOverlayDragSession(
                 pinnedWindowID: id,
@@ -611,16 +662,13 @@ private extension DeskPinsMenuBarAppDelegate {
                 return
             }
 
-            do {
-                _ = try stateController.activatePinnedWindow(id: id)
-                enterDirectInteractionMode(for: id)
-                updateMenuPresentation()
-            } catch {
-                clearDirectInteractionMode()
-            }
+            _ = stateController.markPinnedWindowInteracted(id: id)
+            enterOverlayLeaseAcquiring(for: id)
+            updateOverlaysOnly()
+            startOverlayLeaseHandshake(for: id)
         case .badgeClicked(let id, _):
             endActiveOverlayDragSession(commitPendingDrag: false)
-            clearDirectInteractionMode()
+            clearOverlayInteractionLeaseMode()
             guard let stateController else {
                 return
             }
@@ -637,27 +685,104 @@ private extension DeskPinsMenuBarAppDelegate {
         }
     }
 
-    func enterDirectInteractionMode(for id: UUID) {
-        directInteractionPinnedWindowID = id
-        stateController?.setDirectInteractionPinnedWindow(id: id)
+    func enterOverlayLeaseAcquiring(for id: UUID) {
+        leaseHandshakeTask?.cancel()
+        overlayInteractionLeaseMode = .acquiring(ownerID: id)
+        suppressedLeaseWindowIDs = stateController?.overlappingPinnedWindowIDs(for: id) ?? []
     }
 
-    func clearDirectInteractionMode() {
-        guard directInteractionPinnedWindowID != nil else {
+    func activateOverlayLease(for id: UUID) {
+        guard case .acquiring(let ownerID) = overlayInteractionLeaseMode,
+              ownerID == id else {
             return
         }
-        directInteractionPinnedWindowID = nil
-        stateController?.setDirectInteractionPinnedWindow(id: nil)
+        overlayInteractionLeaseMode = .active(ownerID: id)
     }
 
-    func reconcileDirectInteractionMode() {
-        guard let stateController,
-              let directInteractionPinnedWindowID else {
+    func clearOverlayInteractionLeaseMode() {
+        leaseHandshakeTask?.cancel()
+        leaseHandshakeTask = nil
+        overlayInteractionLeaseMode = .none
+        suppressedLeaseWindowIDs.removeAll()
+        stateController?.clearOverlayInteractionLease()
+    }
+
+    func reconcileOverlayInteractionLeaseMode() {
+        guard let stateController else {
             return
         }
 
-        guard stateController.focusedPinnedWindowID() == directInteractionPinnedWindowID else {
-            clearDirectInteractionMode()
+        switch overlayInteractionLeaseMode {
+        case .none:
+            return
+        case .acquiring(let ownerID):
+            guard stateController.store.window(id: ownerID) != nil else {
+                clearOverlayInteractionLeaseMode()
+                return
+            }
+
+            if stateController.focusedPinnedWindowID() == ownerID {
+                activateOverlayLease(for: ownerID)
+                updateOverlaysOnly()
+            }
+        case .active(let ownerID):
+            guard stateController.store.window(id: ownerID) != nil else {
+                clearOverlayInteractionLeaseMode()
+                updateOverlaysOnly()
+                return
+            }
+
+            guard stateController.focusedPinnedWindowID() == ownerID else {
+                clearOverlayInteractionLeaseMode()
+                updateOverlaysOnly()
+                return
+            }
+        }
+    }
+
+    func startOverlayLeaseHandshake(for id: UUID) {
+        leaseHandshakeTask?.cancel()
+        leaseHandshakeTask = Task { @MainActor [weak self] in
+            guard let self,
+                  let stateController else {
+                return
+            }
+
+            do {
+                _ = try stateController.activatePinnedWindow(id: id)
+            } catch {
+                self.clearOverlayInteractionLeaseMode()
+                self.updateOverlaysOnly()
+                return
+            }
+
+            let timeout = Date.now.addingTimeInterval(0.24)
+            while Date.now < timeout {
+                if Task.isCancelled {
+                    return
+                }
+
+                if stateController.focusedPinnedWindowID() == id {
+                    self.activateOverlayLease(for: id)
+                    self.updateOverlaysOnly()
+                    self.leaseHandshakeTask = nil
+                    return
+                }
+
+                _ = try? stateController.refreshWorkspaceUsingCachedFocus()
+                if stateController.focusedPinnedWindowID() == id {
+                    self.activateOverlayLease(for: id)
+                    self.updateOverlaysOnly()
+                    self.leaseHandshakeTask = nil
+                    return
+                }
+
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+
+            self.clearOverlayInteractionLeaseMode()
+            self.updateOverlaysOnly()
+            self.leaseHandshakeTask = nil
             return
         }
     }
