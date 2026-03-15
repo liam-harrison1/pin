@@ -141,7 +141,12 @@ public final class DeskPinsMenuBarStateController<
             return nil
         }
 
-        return store.matchingWindow(for: focusedWindow.asPinnedReference())?.id
+        let focusedReference = focusedWindow.asPinnedReference()
+        if let matched = store.matchingWindow(for: focusedReference) {
+            return matched.id
+        }
+
+        return bestEffortPinnedWindowIDForLiveFocus(reference: focusedReference)
     }
 
     public func refreshWorkspace() throws -> PinningWorkspaceSnapshot {
@@ -402,6 +407,12 @@ public final class DeskPinsMenuBarStateController<
         visibleEntries: [WindowCatalogEntry],
         at date: Date
     ) {
+        // While an overlay interaction lease is active/acquiring, keep user-chosen
+        // interaction priority stable and do not let catalog refresh reorder it.
+        guard overlayLeaseOwnerID == nil else {
+            return
+        }
+
         let frontmostPinnedWindowID = visibleEntries.compactMap { entry in
             store.matchingWindow(for: entry.asPinnedReference())?.id
         }.first
@@ -455,6 +466,62 @@ public final class DeskPinsMenuBarStateController<
             width: bounds.width,
             height: bounds.height
         )
+    }
+
+    private func bestEffortPinnedWindowIDForLiveFocus(
+        reference focusedReference: PinnedWindowReference
+    ) -> UUID? {
+        let sameProcessWindows = store.allWindows.filter { window in
+            window.reference.ownerPID == focusedReference.ownerPID
+        }
+        guard !sameProcessWindows.isEmpty else {
+            return nil
+        }
+        if sameProcessWindows.count == 1 {
+            return sameProcessWindows.first?.id
+        }
+
+        guard let focusedBounds = focusedReference.bounds else {
+            return nil
+        }
+
+        let scoredWindows = sameProcessWindows.compactMap { window -> (id: UUID, score: Double)? in
+            guard let candidateBounds = window.reference.bounds else {
+                return nil
+            }
+            let score = boundsDistanceScore(
+                lhs: candidateBounds,
+                rhs: focusedBounds
+            )
+            return (id: window.id, score: score)
+        }.sorted { lhs, rhs in
+            lhs.score < rhs.score
+        }
+
+        guard let best = scoredWindows.first else {
+            return nil
+        }
+        if scoredWindows.count == 1 {
+            return best.id
+        }
+
+        let runnerUp = scoredWindows[1]
+        let separation = runnerUp.score - best.score
+        if best.score <= 320 && separation >= 120 {
+            return best.id
+        }
+
+        return nil
+    }
+
+    private func boundsDistanceScore(
+        lhs: PinnedWindowBounds,
+        rhs: PinnedWindowBounds
+    ) -> Double {
+        abs(lhs.x - rhs.x)
+            + abs(lhs.y - rhs.y)
+            + abs(lhs.width - rhs.width)
+            + abs(lhs.height - rhs.height)
     }
 
     private func persistStore() throws {
