@@ -730,12 +730,14 @@ private final class PinnedDragHandleWindow: NSPanel {
             return fullFrame
         }
 
-        let railHeight = min(42, max(26, fullFrame.height * 0.14))
-        let sideInset = min(16, max(6, fullFrame.width * 0.03))
+        // Keep direct-mode drag capture area narrow so top toolbar controls stay usable.
+        let railHeight = min(30, max(20, fullFrame.height * 0.08))
+        let preferredRailWidth = min(180, max(88, fullFrame.width * 0.18))
+        let railWidth = min(fullFrame.width, preferredRailWidth)
         return CGRect(
-            x: fullFrame.minX + sideInset,
-            y: fullFrame.maxY - railHeight,
-            width: max(0, fullFrame.width - (sideInset * 2)),
+            x: fullFrame.midX - (railWidth / 2),
+            y: fullFrame.maxY - railHeight - 6,
+            width: railWidth,
             height: railHeight
         ).integral
     }
@@ -884,7 +886,7 @@ private final class PinnedBadgeWindow: NSPanel {
             .fullScreenAuxiliary,
             .stationary
         ]
-        level = .floating
+        level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         contentView = badgeView
         apply(target: target)
     }
