@@ -6,6 +6,7 @@ public struct FocusedWindowSnapshot: Sendable, Equatable, Codable {
     public var ownerPID: Int32
     public var applicationName: String
     public var windowTitle: String
+    public var windowNumber: Int?
     public var bounds: PinnedWindowBounds?
     public var capturedAt: Date
 
@@ -13,12 +14,14 @@ public struct FocusedWindowSnapshot: Sendable, Equatable, Codable {
         ownerPID: Int32,
         applicationName: String,
         windowTitle: String,
+        windowNumber: Int? = nil,
         bounds: PinnedWindowBounds? = nil,
         capturedAt: Date = .now
     ) {
         self.ownerPID = ownerPID
         self.applicationName = applicationName
         self.windowTitle = windowTitle
+        self.windowNumber = windowNumber
         self.bounds = bounds
         self.capturedAt = capturedAt
     }
@@ -41,6 +44,7 @@ public struct FocusedWindowSnapshot: Sendable, Equatable, Codable {
         PinnedWindowReference(
             ownerPID: ownerPID,
             windowTitle: effectiveTitle,
+            windowNumber: windowNumber,
             bounds: bounds
         )
     }

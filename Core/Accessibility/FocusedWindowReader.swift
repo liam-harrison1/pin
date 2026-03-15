@@ -60,6 +60,10 @@ public struct LiveFocusedWindowReader: FocusedWindowReading {
             attribute: kAXTitleAttribute,
             from: focusedWindowElement
         ) ?? ""
+        let windowNumber = try copyOptionalInt(
+            attribute: "AXWindowNumber",
+            from: focusedWindowElement
+        )
 
         let bounds = try readBounds(from: focusedWindowElement)
 
@@ -67,6 +71,7 @@ public struct LiveFocusedWindowReader: FocusedWindowReading {
             ownerPID: frontmostApplication.processIdentifier,
             applicationName: applicationName,
             windowTitle: title,
+            windowNumber: windowNumber,
             bounds: bounds
         )
     }
@@ -102,6 +107,26 @@ public struct LiveFocusedWindowReader: FocusedWindowReading {
             }
 
             return string
+        case .noValue, .attributeUnsupported:
+            return nil
+        default:
+            throw FocusedWindowReadError.axError("\(result.rawValue) while reading \(attribute)")
+        }
+    }
+
+    private func copyOptionalInt(
+        attribute: String,
+        from element: AXUIElement
+    ) throws -> Int? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+
+        switch result {
+        case .success:
+            guard let number = value as? NSNumber else {
+                return nil
+            }
+            return number.intValue
         case .noValue, .attributeUnsupported:
             return nil
         default:

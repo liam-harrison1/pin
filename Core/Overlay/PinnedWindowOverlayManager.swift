@@ -193,7 +193,8 @@ public final class PinnedWindowOverlayManager {
                 bundle.orderFrontIfNeeded(
                     force: requiresFrontReorder,
                     includePreview: false,
-                    includeControls: true
+                    includeDragHandle: true,
+                    includeBadge: true
                 )
                 continue
             case .suppressed:
@@ -202,7 +203,8 @@ public final class PinnedWindowOverlayManager {
                 bundle.orderFrontIfNeeded(
                     force: requiresFrontReorder,
                     includePreview: false,
-                    includeControls: false
+                    includeDragHandle: false,
+                    includeBadge: true
                 )
                 continue
             case .mirrorVisible:
@@ -221,7 +223,8 @@ public final class PinnedWindowOverlayManager {
             bundle.orderFrontIfNeeded(
                 force: requiresFrontReorder,
                 includePreview: true,
-                includeControls: true
+                includeDragHandle: true,
+                includeBadge: true
             )
         }
 
@@ -436,17 +439,22 @@ private final class PinnedOverlayBundle {
     func orderFrontIfNeeded(
         force: Bool,
         includePreview: Bool,
-        includeControls: Bool
+        includeDragHandle: Bool,
+        includeBadge: Bool
     ) {
         let previewVisibilityNeedsUpdate = includePreview
             ? !previewWindow.isVisible
             : previewWindow.isVisible
-        let controlVisibilityNeedsUpdate = includeControls
-            ? (!dragHandleWindow.isVisible || !badgeWindow.isVisible)
-            : (dragHandleWindow.isVisible || badgeWindow.isVisible)
+        let dragHandleVisibilityNeedsUpdate = includeDragHandle
+            ? !dragHandleWindow.isVisible
+            : dragHandleWindow.isVisible
+        let badgeVisibilityNeedsUpdate = includeBadge
+            ? !badgeWindow.isVisible
+            : badgeWindow.isVisible
         guard force
                 || previewVisibilityNeedsUpdate
-                || controlVisibilityNeedsUpdate else {
+                || dragHandleVisibilityNeedsUpdate
+                || badgeVisibilityNeedsUpdate else {
             return
         }
 
@@ -455,11 +463,14 @@ private final class PinnedOverlayBundle {
         } else {
             previewWindow.orderOut(nil)
         }
-        if includeControls {
+        if includeDragHandle {
             dragHandleWindow.orderFrontRegardless()
-            badgeWindow.orderFrontRegardless()
         } else {
             dragHandleWindow.orderOut(nil)
+        }
+        if includeBadge {
+            badgeWindow.orderFrontRegardless()
+        } else {
             badgeWindow.orderOut(nil)
         }
     }
@@ -545,7 +556,6 @@ private final class PinnedOverlayBundle {
         interactionMode = .suppressed
         previewWindow.orderOut(nil)
         dragHandleWindow.orderOut(nil)
-        badgeWindow.orderOut(nil)
         dragHandleWindow.setDirectInteractionMode(false)
     }
 
@@ -886,7 +896,7 @@ private final class PinnedBadgeWindow: NSPanel {
             .fullScreenAuxiliary,
             .stationary
         ]
-        level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+        level = .floating
         contentView = badgeView
         apply(target: target)
     }
