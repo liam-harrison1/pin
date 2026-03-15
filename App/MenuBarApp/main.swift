@@ -87,6 +87,11 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         action: #selector(refreshWorkspace),
         keyEquivalent: "r"
     )
+    private let unpinAllItem = NSMenuItem(
+        title: "Unpin All Windows",
+        action: #selector(unpinAllPinnedWindows),
+        keyEquivalent: ""
+    )
     private let togglePinItem = NSMenuItem(
         title: "Toggle Current Window Pin",
         action: #selector(toggleCurrentWindowPin),
@@ -153,6 +158,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        clearPinnedWindowsForTermination()
         leaseHandshakeTask?.cancel()
         leaseHandshakeTask = nil
         endActiveOverlayDragSession(commitPendingDrag: false)
@@ -172,6 +178,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         menu.delegate = self
         refreshItem.target = self
+        unpinAllItem.target = self
         togglePinItem.target = self
         requestPermissionItem.target = self
         requestScreenRecordingItem.target = self
@@ -276,6 +283,31 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     @objc
     private func toggleCurrentWindowPin() {
         performPinToggle(usePresentedFocus: true, showSuccessAlert: true)
+    }
+
+    @objc
+    private func unpinAllPinnedWindows() {
+        endActiveOverlayDragSession(commitPendingDrag: false)
+        clearOverlayInteractionLeaseMode()
+        guard let stateController else {
+            return
+        }
+
+        do {
+            let removed = try stateController.unpinAllWindows()
+            updateMenuPresentation()
+            if !removed.isEmpty {
+                presentDeskPinsAlert(
+                    title: "Unpinned all windows",
+                    message: "Removed \(removed.count) pinned window(s)."
+                )
+            }
+        } catch {
+            presentDeskPinsAlert(
+                title: "Unpin-all failed",
+                message: error.localizedDescription
+            )
+        }
     }
 
     @objc
@@ -423,6 +455,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         let buttonTitle = pinnedCount > 0 ? "Pins \(pinnedCount)" : "Pins"
         statusItem.button?.title = buttonTitle
         statusItem.button?.toolTip = "DeskPins: \(focusDescription)"
+        unpinAllItem.isEnabled = pinnedCount > 0
         rebuildDynamicPinnedWindowItems(using: presentation)
         rebuildDynamicVisibleWindowItems(using: presentation)
         rebuildMenu()
@@ -511,6 +544,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
 
         menu.addItem(.separator())
         menu.addItem(refreshItem)
+        menu.addItem(unpinAllItem)
         menu.addItem(togglePinItem)
         menu.addItem(requestPermissionItem)
         menu.addItem(requestScreenRecordingItem)
@@ -1052,6 +1086,7 @@ private extension DeskPinsMenuBarAppDelegate {
     }
 
     func handleTerminationSignal() {
+        clearPinnedWindowsForTermination()
         teardownStatusUI()
         cancelSignalHandlers()
         NSApplication.shared.terminate(nil)
@@ -1076,6 +1111,12 @@ private extension DeskPinsMenuBarAppDelegate {
     func cancelSignalHandlers() {
         signalSources.forEach { $0.cancel() }
         signalSources.removeAll()
+    }
+
+    func clearPinnedWindowsForTermination() {
+        endActiveOverlayDragSession(commitPendingDrag: false)
+        clearOverlayInteractionLeaseMode()
+        _ = try? stateController?.unpinAllWindows()
     }
 }
 

@@ -229,6 +229,19 @@ public final class DeskPinsMenuBarStateController<
         return removed
     }
 
+    @discardableResult
+    public func unpinAllWindows() throws -> [PinnedWindow] {
+        let removed = store.unpinAll()
+
+        guard !removed.isEmpty else {
+            return []
+        }
+
+        try persistStore()
+        _ = try? refreshWorkspace(using: currentFocusCapture())
+        return removed
+    }
+
     public func toggleVisibleWindow(id: UUID) throws -> PinCatalogWindowToggleResult? {
         guard let entry = workspaceSnapshot?.visibleEntries.first(where: { $0.id == id }) else {
             return nil
