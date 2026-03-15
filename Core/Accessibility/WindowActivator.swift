@@ -89,6 +89,15 @@ public struct LiveWindowActivator: WindowActivating {
         in applicationElement: AXUIElement
     ) throws -> AXUIElement? {
         let windows = try copyWindowElements(from: applicationElement)
+        if let windowNumber = reference.windowNumber,
+           let exactWindow = windows.first(where: { candidate in
+               (try? copyOptionalInt(
+                   attribute: "AXWindowNumber",
+                   from: candidate
+               )) == windowNumber
+           }) {
+            return exactWindow
+        }
 
         if let bestWindow = windows.max(by: { lhs, rhs in
             matchScore(for: lhs, reference: reference) < matchScore(for: rhs, reference: reference)
@@ -155,6 +164,28 @@ public struct LiveWindowActivator: WindowActivating {
         switch result {
         case .success:
             return value as? String
+        case .noValue, .attributeUnsupported:
+            return nil
+        default:
+            throw WindowActivationError.axError(
+                "\(result.rawValue) while reading \(attribute)"
+            )
+        }
+    }
+
+    private func copyOptionalInt(
+        attribute: String,
+        from element: AXUIElement
+    ) throws -> Int? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+
+        switch result {
+        case .success:
+            guard let number = value as? NSNumber else {
+                return nil
+            }
+            return number.intValue
         case .noValue, .attributeUnsupported:
             return nil
         default:
