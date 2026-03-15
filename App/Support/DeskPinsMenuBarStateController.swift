@@ -136,6 +136,14 @@ public final class DeskPinsMenuBarStateController<
         return store.matchingWindow(for: focusedEntry.asPinnedReference())?.id
     }
 
+    public func focusedPinnedWindowIDUsingLiveFocus() -> UUID? {
+        guard let focusedWindow = try? focusedReader.currentFocusedWindow() else {
+            return nil
+        }
+
+        return store.matchingWindow(for: focusedWindow.asPinnedReference())?.id
+    }
+
     public func refreshWorkspace() throws -> PinningWorkspaceSnapshot {
         try refreshWorkspace(using: nil)
     }
@@ -252,6 +260,18 @@ public final class DeskPinsMenuBarStateController<
         try persistStore()
         _ = try? refreshWorkspace()
         return store.window(id: id)
+    }
+
+    @discardableResult
+    public func activatePinnedWindowLightweight(id: UUID) throws -> Bool {
+        guard let window = store.window(id: id) else {
+            return false
+        }
+
+        try windowActivator.activateWindow(reference: window.reference)
+        _ = store.markActivated(id: id, at: .now)
+        try persistStore()
+        return true
     }
 
     public func presentation() -> DeskPinsMenuBarPresentation {
