@@ -78,6 +78,8 @@ It prioritizes a public-API-first approach and app-owned overlay consistency.
 - [MVP Checklist](Docs/mvp-checklist.md)
 - [Permission Model](Docs/permission-model.md)
 - [Release Plan](Docs/release-plan.md)
+- [Release Draft (Bilingual)](Docs/release-draft-v0.1.0-beta.1.md)
+- [Screenshot Checklist](Docs/release-screenshot-checklist-v0.1.0.md)
 
 ## Contributing
 
