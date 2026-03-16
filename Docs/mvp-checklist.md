@@ -23,7 +23,7 @@
 - [x] Add a permission guidance entry in the UI.
 - [x] Add a global shortcut for toggling the current focused window pin.
 - [x] Add a Screen Recording permission request entry for the content-overlay branch.
-- [ ] Add basic app logging for startup and action failures.
+- [x] Add basic app logging for startup and action failures.
 - [ ] Add a settings surface for shortcut and ordering behavior.
 
 ## Phase 2: Pin Current Window
@@ -34,6 +34,7 @@
 - [x] Implement unpin for the current focused window.
 - [x] Handle invalid or missing focused window states gracefully.
 - [x] Build a refresh coordinator that combines focused-window state, visible-window catalog data, and pinned-window reconciliation.
+- [x] Prefer `windowNumber` during activation/move matching and fallback to title/bounds scoring.
 
 ## Phase 3: Overlay and Ordering
 

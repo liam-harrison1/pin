@@ -6,6 +6,7 @@ import DeskPinsPinned
 import DeskPinsPinning
 import DeskPinsWindowCatalog
 
+// swiftlint:disable type_body_length
 @main
 struct DeskPinsAppSupportSmokeTests {
     @MainActor
@@ -17,6 +18,8 @@ struct DeskPinsAppSupportSmokeTests {
             try testControllerCanToggleVisibleWindowFromWorkspace()
             try testControllerCanBringPinnedWindowForward()
             try testControllerCreatesOverlayTargetsForVisiblePinnedWindows()
+            try testControllerAppliesOverlayLeaseRenderPolicies()
+            try testOverlayLeaseStateTransitions()
             try testControllerPromotesFrontmostPinnedWindowOnRefresh()
             print("DeskPinsAppSupport smoke tests passed")
         } catch {
@@ -375,6 +378,157 @@ struct DeskPinsAppSupportSmokeTests {
     }
 
     @MainActor
+    private static func testControllerAppliesOverlayLeaseRenderPolicies() throws {
+        let tempRoot = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let fileURL = tempRoot.appendingPathComponent("PinnedStore.json")
+        let persistence = JSONPinnedWindowStorePersistence(fileURL: fileURL)
+        let ownerWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 861,
+                windowTitle: "Owner Window",
+                windowNumber: 1861,
+                bounds: PinnedWindowBounds(x: 80, y: 80, width: 540, height: 360)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_100)
+        )
+        let suppressedWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 862,
+                windowTitle: "Suppressed Window",
+                windowNumber: 1862,
+                bounds: PinnedWindowBounds(x: 120, y: 120, width: 520, height: 340)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_110)
+        )
+        _ = try persistence.saveStore(
+            PinnedWindowStore(windows: [ownerWindow, suppressedWindow]),
+            savedAt: Date(timeIntervalSince1970: 16_200)
+        )
+
+        let visibleEntries = [
+            WindowCatalogEntry(
+                frontToBackIndex: 0,
+                ownerPID: 861,
+                ownerName: "AppA",
+                windowTitle: "Owner Window",
+                windowNumber: 1861,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 80, y: 80, width: 540, height: 360),
+                isOnScreen: true
+            ),
+            WindowCatalogEntry(
+                frontToBackIndex: 1,
+                ownerPID: 862,
+                ownerName: "AppB",
+                windowTitle: "Suppressed Window",
+                windowNumber: 1862,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 120, y: 120, width: 520, height: 340),
+                isOnScreen: true
+            )
+        ]
+        let controller = try DeskPinsMenuBarStateController(
+            trustChecker: StaticAccessibilityTrustChecker(status: .trusted),
+            focusedReader: StaticFocusedWindowReader(
+                snapshot: FocusedWindowSnapshot(
+                    ownerPID: 861,
+                    applicationName: "AppA",
+                    windowTitle: "Owner Window"
+                )
+            ),
+            catalogReader: StaticWindowCatalogReader(catalog: WindowCatalog(entries: visibleEntries)),
+            persistence: persistence
+        )
+
+        _ = try controller.refreshWorkspace()
+        controller.setOverlayInteractionLease(
+            ownerID: ownerWindow.id,
+            active: true,
+            suppressedWindowIDs: [suppressedWindow.id]
+        )
+        let leasedTargets = controller.overlayTargets()
+
+        let ownerPolicy = leasedTargets.first(where: { $0.id == ownerWindow.id })?.renderPolicy
+        let suppressedPolicy = leasedTargets.first(where: { $0.id == suppressedWindow.id })?.renderPolicy
+        try expect(
+            ownerPolicy == .directInteractionOwner,
+            message: "active lease owner should render in direct-interaction mode"
+        )
+        try expect(
+            suppressedPolicy == .suppressed,
+            message: "suppressed lease competitors should render in suppressed mode"
+        )
+
+        controller.clearOverlayInteractionLease()
+        let resetTargets = controller.overlayTargets()
+        let resetPolicies = resetTargets.map(\.renderPolicy)
+        try expect(
+            resetPolicies.allSatisfy { $0 == .mirrorVisible },
+            message: "clearing lease should restore mirror rendering for all pinned targets"
+        )
+    }
+
+    private static func testOverlayLeaseStateTransitions() throws {
+        let ownerID = UUID()
+        let competitorID = UUID()
+        var leaseState = OverlayInteractionLeaseState()
+
+        leaseState.enterAcquiring(
+            ownerID: ownerID,
+            suppressedWindowIDs: [competitorID],
+            at: Date(timeIntervalSince1970: 500)
+        )
+        try expect(
+            leaseState.mode == .acquiring(ownerID: ownerID),
+            message: "lease state should enter acquiring mode for the requested owner"
+        )
+        try expect(
+            leaseState.suppressedWindowIDs == [competitorID],
+            message: "lease state should preserve suppressed competitor ids while acquiring"
+        )
+
+        try expect(
+            leaseState.activate(ownerID: UUID()) == false,
+            message: "lease state activation should reject a mismatched owner id"
+        )
+        try expect(
+            leaseState.activate(ownerID: ownerID),
+            message: "lease state activation should succeed for the acquiring owner id"
+        )
+        try expect(
+            leaseState.mode == .active(ownerID: ownerID),
+            message: "lease state should transition to active mode after activation"
+        )
+
+        leaseState.markFocusUnknownIfNeeded(at: Date(timeIntervalSince1970: 501))
+        try expect(
+            leaseState.unknownFocusWithinGracePeriod(
+                at: Date(timeIntervalSince1970: 501.05),
+                graceInterval: 0.12
+            ),
+            message: "lease state should honor focus-unknown grace interval after activation"
+        )
+
+        leaseState.clear()
+        try expect(
+            leaseState.mode == .none,
+            message: "clearing lease state should return it to none mode"
+        )
+        try expect(
+            leaseState.suppressedWindowIDs.isEmpty,
+            message: "clearing lease state should remove suppressed competitor ids"
+        )
+        try expect(
+            leaseState.handshakeElapsedMilliseconds() == nil,
+            message: "clearing lease state should drop handshake timing context"
+        )
+    }
+
+    @MainActor
     private static func testControllerPromotesFrontmostPinnedWindowOnRefresh() throws {
         let tempRoot = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: tempRoot) }
@@ -471,6 +625,7 @@ struct DeskPinsAppSupportSmokeTests {
         throw SmokeTestFailure(message: message)
     }
 }
+// swiftlint:enable type_body_length
 
 private struct SmokeTestFailure: Error, CustomStringConvertible {
     let message: String
