@@ -42,8 +42,22 @@ public enum PinnedWindowOverlayInteractionEvent: Sendable, Equatable {
         deltaY: Double
     )
     case dragEnded(id: UUID, reference: PinnedWindowReference)
-    case contentInteractionRequested(id: UUID, reference: PinnedWindowReference)
+    case contentInteractionRequested(
+        id: UUID,
+        reference: PinnedWindowReference,
+        screenPoint: PinnedOverlayScreenPoint
+    )
     case badgeClicked(id: UUID, reference: PinnedWindowReference)
+}
+
+public struct PinnedOverlayScreenPoint: Sendable, Equatable {
+    public var x: Double
+    public var y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
 }
 
 public typealias PinnedWindowOverlayInteractionHandler = @MainActor (
@@ -204,7 +218,9 @@ public final class PinnedWindowOverlayManager {
                     force: requiresFrontReorder,
                     includePreview: false,
                     includeDragHandle: false,
-                    includeBadge: false
+                    // Keep a lightweight pin anchor visible so suppressed windows
+                    // remain discoverable/clickable without restoring full overlay.
+                    includeBadge: true
                 )
                 continue
             case .mirrorVisible:
@@ -806,14 +822,32 @@ private final class PinnedDragHandleView: NSView {
             guard !isInDirectInteractionMode else {
                 return
             }
+            let screenPoint = screenLocation(for: event)
             interactionHandler?(
                 .contentInteractionRequested(
                     id: target.id,
-                    reference: target.reference
+                    reference: target.reference,
+                    screenPoint: PinnedOverlayScreenPoint(
+                        x: Double(screenPoint.x),
+                        y: Double(screenPoint.y)
+                    )
                 )
             )
         case .edgeGuard:
-            return
+            guard !isInDirectInteractionMode else {
+                return
+            }
+            let screenPoint = screenLocation(for: event)
+            interactionHandler?(
+                .contentInteractionRequested(
+                    id: target.id,
+                    reference: target.reference,
+                    screenPoint: PinnedOverlayScreenPoint(
+                        x: Double(screenPoint.x),
+                        y: Double(screenPoint.y)
+                    )
+                )
+            )
         }
     }
 

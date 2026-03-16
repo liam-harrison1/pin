@@ -76,6 +76,8 @@ public final class DeskPinsMenuBarStateController<
     private var overlayLeaseOwnerID: UUID?
     private var isOverlayLeaseActive = false
     private var suppressedPinnedWindowIDs: Set<UUID> = []
+    private var interactionPersistTask: Task<Void, Never>?
+    private let interactionPersistDebounceInterval: TimeInterval = 0.8
 
     public init(
         trustChecker: TrustChecker,
@@ -115,6 +117,11 @@ public final class DeskPinsMenuBarStateController<
 
         overlayLeaseOwnerID = ownerID
         isOverlayLeaseActive = active
+        guard active else {
+            suppressedPinnedWindowIDs.removeAll()
+            return
+        }
+
         suppressedPinnedWindowIDs = Set(
             suppressedWindowIDs.filter { id in
                 id != ownerID && store.window(id: id) != nil
@@ -262,7 +269,7 @@ public final class DeskPinsMenuBarStateController<
     ) -> PinnedWindow? {
         let activated = store.markActivated(id: id, at: date)
         if activated != nil {
-            try? persistStore()
+            scheduleInteractionPersistence()
         }
         return activated
     }
@@ -288,7 +295,7 @@ public final class DeskPinsMenuBarStateController<
 
         try windowActivator.activateWindow(reference: window.reference)
         _ = store.markActivated(id: id, at: .now)
-        try persistStore()
+        scheduleInteractionPersistence()
         return true
     }
 
@@ -368,17 +375,31 @@ public final class DeskPinsMenuBarStateController<
         let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
 
         guard let owner = orderedWindows.first(where: { $0.id == id }),
-              let ownerFrame = frameForPinnedWindow(owner, visibleEntries: visibleEntries) else {
+              let ownerFrame = liveFrameForPinnedWindow(owner, visibleEntries: visibleEntries) else {
             return []
         }
 
-        let overlapInsets: CGFloat = 1
+        let overlapInsets: CGFloat = 2
         let matchFrame = ownerFrame.insetBy(dx: -overlapInsets, dy: -overlapInsets)
         var overlappingIDs: Set<UUID> = []
 
         for window in orderedWindows where window.id != id {
-            guard let frame = frameForPinnedWindow(window, visibleEntries: visibleEntries),
-                  frame.intersects(matchFrame) else {
+            guard let frame = liveFrameForPinnedWindow(window, visibleEntries: visibleEntries) else {
+                continue
+            }
+
+            let intersection = frame.intersection(matchFrame)
+            guard !intersection.isNull else {
+                continue
+            }
+
+            let overlapArea = intersection.width * intersection.height
+            let minArea = min(
+                ownerFrame.width * ownerFrame.height,
+                frame.width * frame.height
+            )
+            let requiredArea = max(2_000, minArea * 0.01)
+            guard overlapArea >= requiredArea else {
                 continue
             }
             overlappingIDs.insert(window.id)
@@ -481,6 +502,24 @@ public final class DeskPinsMenuBarStateController<
         )
     }
 
+    private func liveFrameForPinnedWindow(
+        _ pinnedWindow: PinnedWindow,
+        visibleEntries: [WindowCatalogEntry]
+    ) -> CGRect? {
+        guard let visibleEntry = visibleEntries.first(where: { entry in
+            pinnedWindow.reference.likelyMatches(entry.asPinnedReference())
+        }) else {
+            return nil
+        }
+
+        return CGRect(
+            x: visibleEntry.bounds.x,
+            y: visibleEntry.bounds.y,
+            width: visibleEntry.bounds.width,
+            height: visibleEntry.bounds.height
+        )
+    }
+
     private func bestEffortPinnedWindowIDForLiveFocus(
         reference focusedReference: PinnedWindowReference
     ) -> UUID? {
@@ -539,5 +578,24 @@ public final class DeskPinsMenuBarStateController<
 
     private func persistStore() throws {
         _ = try persistence.saveStore(store, savedAt: .now)
+    }
+
+    private func scheduleInteractionPersistence() {
+        interactionPersistTask?.cancel()
+        let delayNanoseconds = UInt64(
+            interactionPersistDebounceInterval * 1_000_000_000
+        )
+        interactionPersistTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+            } catch {
+                return
+            }
+            self.interactionPersistTask = nil
+            try? self.persistStore()
+        }
     }
 }

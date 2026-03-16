@@ -19,7 +19,11 @@ struct DeskPinsAppSupportSmokeTests {
             try testControllerCanBringPinnedWindowForward()
             try testControllerCreatesOverlayTargetsForVisiblePinnedWindows()
             try testControllerAppliesOverlayLeaseRenderPolicies()
+            try testControllerDoesNotSuppressWhileLeaseAcquiring()
+            try testOverlapSuppressionUsesLiveVisibleFramesOnly()
+            try testOverlapSuppressionRequiresMeaningfulArea()
             try testOverlayLeaseStateTransitions()
+            try testOverlayLeaseStateKeepsAcquiringUntilHandshakeTimeout()
             try testControllerPromotesFrontmostPinnedWindowOnRefresh()
             print("DeskPinsAppSupport smoke tests passed")
         } catch {
@@ -472,6 +476,241 @@ struct DeskPinsAppSupportSmokeTests {
         )
     }
 
+    @MainActor
+    private static func testControllerDoesNotSuppressWhileLeaseAcquiring() throws {
+        let tempRoot = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let fileURL = tempRoot.appendingPathComponent("PinnedStore.json")
+        let persistence = JSONPinnedWindowStorePersistence(fileURL: fileURL)
+        let ownerWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 863,
+                windowTitle: "Owner Window",
+                windowNumber: 1863,
+                bounds: PinnedWindowBounds(x: 90, y: 90, width: 540, height: 360)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_120)
+        )
+        let competitorWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 864,
+                windowTitle: "Competitor Window",
+                windowNumber: 1864,
+                bounds: PinnedWindowBounds(x: 120, y: 120, width: 500, height: 320)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_130)
+        )
+        _ = try persistence.saveStore(
+            PinnedWindowStore(windows: [ownerWindow, competitorWindow]),
+            savedAt: Date(timeIntervalSince1970: 16_220)
+        )
+
+        let visibleEntries = [
+            WindowCatalogEntry(
+                frontToBackIndex: 0,
+                ownerPID: 863,
+                ownerName: "AppA",
+                windowTitle: "Owner Window",
+                windowNumber: 1863,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 90, y: 90, width: 540, height: 360),
+                isOnScreen: true
+            ),
+            WindowCatalogEntry(
+                frontToBackIndex: 1,
+                ownerPID: 864,
+                ownerName: "AppB",
+                windowTitle: "Competitor Window",
+                windowNumber: 1864,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 120, y: 120, width: 500, height: 320),
+                isOnScreen: true
+            )
+        ]
+        let controller = try DeskPinsMenuBarStateController(
+            trustChecker: StaticAccessibilityTrustChecker(status: .trusted),
+            focusedReader: StaticFocusedWindowReader(
+                snapshot: FocusedWindowSnapshot(
+                    ownerPID: 863,
+                    applicationName: "AppA",
+                    windowTitle: "Owner Window"
+                )
+            ),
+            catalogReader: StaticWindowCatalogReader(catalog: WindowCatalog(entries: visibleEntries)),
+            persistence: persistence
+        )
+
+        _ = try controller.refreshWorkspace()
+        controller.setOverlayInteractionLease(
+            ownerID: ownerWindow.id,
+            active: false,
+            suppressedWindowIDs: [competitorWindow.id]
+        )
+        let acquiringTargets = controller.overlayTargets()
+        let acquiringPolicies = acquiringTargets.map(\.renderPolicy)
+        try expect(
+            acquiringPolicies.allSatisfy { $0 == .mirrorVisible },
+            message: "acquiring lease should not suppress competitors before activation is confirmed"
+        )
+    }
+
+    @MainActor
+    private static func testOverlapSuppressionUsesLiveVisibleFramesOnly() throws {
+        let tempRoot = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let fileURL = tempRoot.appendingPathComponent("PinnedStore.json")
+        let persistence = JSONPinnedWindowStorePersistence(fileURL: fileURL)
+        let ownerWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 871,
+                windowTitle: "Owner",
+                windowNumber: 1871,
+                bounds: PinnedWindowBounds(x: 0, y: 0, width: 900, height: 600)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_300)
+        )
+        let candidateWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 872,
+                windowTitle: "Candidate",
+                windowNumber: 1872,
+                bounds: PinnedWindowBounds(x: 10, y: 10, width: 880, height: 580)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_310)
+        )
+        _ = try persistence.saveStore(
+            PinnedWindowStore(windows: [ownerWindow, candidateWindow]),
+            savedAt: Date(timeIntervalSince1970: 16_320)
+        )
+
+        // Live visible frames are far apart even though persisted bounds overlap heavily.
+        let visibleEntries = [
+            WindowCatalogEntry(
+                frontToBackIndex: 0,
+                ownerPID: 871,
+                ownerName: "AppA",
+                windowTitle: "Owner",
+                windowNumber: 1871,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 20, y: 20, width: 420, height: 300),
+                isOnScreen: true
+            ),
+            WindowCatalogEntry(
+                frontToBackIndex: 1,
+                ownerPID: 872,
+                ownerName: "AppB",
+                windowTitle: "Candidate",
+                windowNumber: 1872,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 820, y: 520, width: 420, height: 300),
+                isOnScreen: true
+            )
+        ]
+        let controller = try DeskPinsMenuBarStateController(
+            trustChecker: StaticAccessibilityTrustChecker(status: .trusted),
+            focusedReader: StaticFocusedWindowReader(
+                snapshot: FocusedWindowSnapshot(
+                    ownerPID: 871,
+                    applicationName: "AppA",
+                    windowTitle: "Owner"
+                )
+            ),
+            catalogReader: StaticWindowCatalogReader(catalog: WindowCatalog(entries: visibleEntries)),
+            persistence: persistence
+        )
+
+        _ = try controller.refreshWorkspace()
+        let suppressed = controller.overlappingPinnedWindowIDs(for: ownerWindow.id)
+
+        try expect(
+            suppressed.isEmpty,
+            message: "suppression overlap should rely on live visible frames to avoid stale false positives"
+        )
+    }
+
+    @MainActor
+    private static func testOverlapSuppressionRequiresMeaningfulArea() throws {
+        let tempRoot = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let fileURL = tempRoot.appendingPathComponent("PinnedStore.json")
+        let persistence = JSONPinnedWindowStorePersistence(fileURL: fileURL)
+        let ownerWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 873,
+                windowTitle: "Owner",
+                windowNumber: 1873,
+                bounds: PinnedWindowBounds(x: 100, y: 100, width: 600, height: 420)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_330)
+        )
+        let candidateWindow = PinnedWindow(
+            reference: PinnedWindowReference(
+                ownerPID: 874,
+                windowTitle: "Candidate",
+                windowNumber: 1874,
+                bounds: PinnedWindowBounds(x: 680, y: 490, width: 400, height: 300)
+            ),
+            lastPinnedAt: Date(timeIntervalSince1970: 16_340)
+        )
+        _ = try persistence.saveStore(
+            PinnedWindowStore(windows: [ownerWindow, candidateWindow]),
+            savedAt: Date(timeIntervalSince1970: 16_350)
+        )
+
+        // Only 20x20 overlap (area = 400), below meaningful-area threshold.
+        let visibleEntries = [
+            WindowCatalogEntry(
+                frontToBackIndex: 0,
+                ownerPID: 873,
+                ownerName: "AppA",
+                windowTitle: "Owner",
+                windowNumber: 1873,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 100, y: 100, width: 600, height: 420),
+                isOnScreen: true
+            ),
+            WindowCatalogEntry(
+                frontToBackIndex: 1,
+                ownerPID: 874,
+                ownerName: "AppB",
+                windowTitle: "Candidate",
+                windowNumber: 1874,
+                layer: 0,
+                alpha: 1,
+                bounds: WindowCatalogBounds(x: 680, y: 490, width: 400, height: 300),
+                isOnScreen: true
+            )
+        ]
+        let controller = try DeskPinsMenuBarStateController(
+            trustChecker: StaticAccessibilityTrustChecker(status: .trusted),
+            focusedReader: StaticFocusedWindowReader(
+                snapshot: FocusedWindowSnapshot(
+                    ownerPID: 873,
+                    applicationName: "AppA",
+                    windowTitle: "Owner"
+                )
+            ),
+            catalogReader: StaticWindowCatalogReader(catalog: WindowCatalog(entries: visibleEntries)),
+            persistence: persistence
+        )
+
+        _ = try controller.refreshWorkspace()
+        let suppressed = controller.overlappingPinnedWindowIDs(for: ownerWindow.id)
+
+        try expect(
+            suppressed.isEmpty,
+            message: "suppression should ignore tiny overlaps to avoid accidental competitor suppression"
+        )
+    }
+
     private static func testOverlayLeaseStateTransitions() throws {
         let ownerID = UUID()
         let competitorID = UUID()
@@ -525,6 +764,33 @@ struct DeskPinsAppSupportSmokeTests {
         try expect(
             leaseState.handshakeElapsedMilliseconds() == nil,
             message: "clearing lease state should drop handshake timing context"
+        )
+    }
+
+    private static func testOverlayLeaseStateKeepsAcquiringUntilHandshakeTimeout() throws {
+        let ownerID = UUID()
+        let otherID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 800)
+        var leaseState = OverlayInteractionLeaseState()
+        leaseState.enterAcquiring(
+            ownerID: ownerID,
+            suppressedWindowIDs: [otherID],
+            at: startedAt
+        )
+
+        try expect(
+            leaseState.mode == .acquiring(ownerID: ownerID),
+            message: "lease should remain acquiring before handshake is explicitly resolved"
+        )
+        try expect(
+            leaseState.handshakeElapsedMilliseconds(
+                at: startedAt.addingTimeInterval(0.2)
+            ) == 200,
+            message: "lease handshake timing should continue advancing while acquiring"
+        )
+        try expect(
+            leaseState.mode != .none,
+            message: "lease should not auto-clear just because focus may still be on a previous pinned window"
         )
     }
 
