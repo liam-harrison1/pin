@@ -3,7 +3,7 @@
 ## Phase 0: Project Setup
 
 - [x] Confirm project docs are the source of truth.
-- [x] Keep [deskpins-project-book-v2.md](/Users/lzc/Documents/科研/deskpins尝试/deskpins-project-book-v2.md) as the umbrella document.
+- [x] Keep [deskpins-project-book-v2.md](../deskpins-project-book-v2.md) as the umbrella document.
 - [x] Create and maintain `Docs/product-spec.md`.
 - [x] Create and maintain `Docs/architecture.md`.
 - [x] Create and maintain `Docs/permission-model.md`.
