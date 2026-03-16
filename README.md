@@ -1,196 +1,88 @@
 # DeskPins for macOS
 
-DeskPins is a macOS DeskPins-style window pinning project built around public system APIs.
+[![Verify](https://github.com/liam-harrison1/pin/actions/workflows/verify.yml/badge.svg)](https://github.com/liam-harrison1/pin/actions/workflows/verify.yml)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-The repository is currently in a bootstrap-but-runnable state:
+DeskPins is an open-source macOS menu bar utility for pinning important windows in front of your workflow using public APIs.
 
-- core pinning, focused-window reading, and window-catalog logic compile with Swift Package Manager
-- a minimal AppKit menu bar shell can be launched from the package
-- pinned windows now render app-owned `📌` badge overlays and, on the content-overlay branch, can mirror pinned window content above other apps
-- repository verification, smoke tests, PR template, and CI scaffolding are in place
-- richer settings, stronger ordering controls, and polished app-shell surfaces are still in progress
+## Highlights
 
-## Current Capabilities
+- Menu bar-first UX for fast pin/unpin actions
+- Pin current focused window or pin from a searchable visible-window list
+- Multi-window pin management with interaction-aware ordering
+- App-owned overlay system (`preview` / `drag` / `badge`) for pin feedback
+- Global shortcut support (`Control-Option-Command-P` by default)
+- JSON persistence at `~/Library/Application Support/DeskPins/PinnedWindows.json`
 
-This repository currently includes:
+## Current Status
 
-- Accessibility trust detection
-- focused-window snapshot reading
-- visible-window catalog enumeration through `CGWindowListCopyWindowInfo`
-- pin and unpin workflows for the current focused window
-- pin and unpin workflows for visible catalog entries
-- stale pinned-window reconciliation when a catalog refresh no longer matches an entry
-- a workspace coordinator that combines catalog state, focused-window state, and pinned-window state into a single refresh snapshot
-- JSON persistence for pinned-window store snapshots
-- a runnable menu bar app shell with pre-menu workspace capture, permission request, current-window pin toggle, visible-window pinning, per-window bring-forward and unpin actions, and continuous overlay refresh
-- a global shortcut for toggling the current focused window pin
-- a ScreenCaptureKit-backed content-overlay prototype on `codex/feat-screen-recording-overlay` using per-window `SCStream` sessions and latest-frame caches
-  - when a pinned window is frontmost, the branch now suppresses mirroring for direct interaction and keeps badge/drag overlays active
+This repository is in a runnable bootstrap stage:
 
-## What Is Not Built Yet
+- SwiftPM build is the primary development path
+- Core modules and smoke tests are stable
+- Menu bar app shell is usable for day-to-day testing
+- Settings UI and advanced controls are still being refined
 
-The current branch does not yet include:
+## Architecture (at a glance)
 
-- finished settings UI for shortcut and ordering preferences
-- advanced overlay controls such as opacity tuning and click-through modes
-- a finished Xcode project target
+- `App/MenuBarApp`: app entry + menu bar shell
+- `App/Support`: state orchestration and menu-facing controller
+- `Core/Accessibility`: AX trust, focused-window reads, activation/move
+- `Core/WindowCatalog`: visible-window catalog via `CGWindowListCopyWindowInfo`
+- `Core/Pinned`: pin identity, ordering, invalidation, persistence
+- `Core/Pinning`: pin/unpin workflows and workspace refresh coordinator
+- `Core/Overlay`: overlay rendering and interaction handling
+- `Core/HotKey`: global shortcut registration and routing
 
 ## Requirements
 
-- macOS with Xcode Command Line Tools installed
+- macOS
+- Xcode Command Line Tools
 - Swift toolchain compatible with `swift-tools-version: 6.0`
-
-Full Xcode is now available on this machine, but the repository still builds and runs through Swift Package Manager.
 
 ## Quick Start
 
-Clone the repository and run:
-
 ```bash
 ./Scripts/verify.sh
-```
-
-This script currently checks:
-
-- required docs and repo workflow files
-- merge conflict markers
-- shell script syntax
-- `swift build`
-- all smoke-test executables in `Tools/`
-
-If `swiftlint` is installed locally, the script will run it automatically. If an Xcode project or workspace is later added, `verify.sh` will also require an Xcode scheme via `DESKPINS_XCODE_SCHEME`.
-
-## Manual Try-Out Guide
-
-The current manual verification path is code-level rather than UI-level.
-
-### 1. Run the full repository gate
-
-```bash
-./Scripts/verify.sh
-```
-
-Expected result:
-
-- build completes successfully
-- all smoke tests print `... smoke tests passed`
-
-### 2. Run individual smoke tests if you want to inspect one subsystem at a time
-
-```bash
-swift run DeskPinsAccessibilitySmokeTests
-swift run DeskPinsAppSupportSmokeTests
-swift run DeskPinsPinnedSmokeTests
-swift run DeskPinsPinnedPersistenceSmokeTests
-swift run DeskPinsPinningSmokeTests
-swift run DeskPinsWindowCatalogSmokeTests
-```
-
-Important:
-
-- these are test executables only; they print pass/fail and exit
-- they do not launch the menu bar app and will not show a `Pins` icon
-
-### 3. Launch the current menu bar shell
-
-```bash
 ./Scripts/run-app.sh
 ```
 
-Equivalent direct command:
+Expected behavior:
 
-```bash
-swift run DeskPinsMenuBarApp
-```
+- `verify.sh` passes build + smoke tests
+- `Pins` appears in the menu bar when launching the app
 
-What you should expect:
+## Permissions
 
-- a `Pins` status item appears in the macOS menu bar
-- the menu captures the external focused window before it opens, so pin actions work against the last real app window rather than the menu itself
-- the menu offers refresh, accessibility permission request, screen-recording permission request, current-window pin toggle, visible-window pinning, and bring-forward / unpin actions for already pinned windows
-- pinned windows get a floating `📌` badge near the title-bar area
-- on `codex/feat-screen-recording-overlay`, pinned windows also render a content overlay that mirrors the source window above other apps when Screen Recording is granted
-- the default global shortcut is `Control-Option-Command-P`
-- pinned windows are saved to `~/Library/Application Support/DeskPins/PinnedWindows.json`
+Baseline branch:
 
-Important behavior note:
+- Accessibility (required)
 
-- with public macOS APIs, DeskPins can reliably keep its own overlay above the desktop and can bring a matching pinned window forward on demand
-- on the content-overlay branch, the preview you see on top is an app-owned mirrored overlay, not the original third-party window object itself
-- it still does not promise true system-wide always-on-top semantics for every third-party window
+Experimental mirrored-content mode:
 
-Manual step you will likely need:
+- Accessibility
+- Screen Recording
 
-- grant Accessibility access to the host process you are using to launch the app
-- on the content-overlay branch, also grant Screen Recording access to the same host process if you want the mirrored pinned content to appear
+See [Docs/permission-model.md](Docs/permission-model.md) for details.
 
-If you launch through Terminal:
+## Known Boundary
 
-- add Terminal under `Privacy & Security > Accessibility`
-- add Terminal under `Privacy & Security > Screen Recording` for the mirrored content overlay
+DeskPins does not promise absolute system-level always-on-top semantics for every third-party window object.  
+It prioritizes a public-API-first approach and app-owned overlay consistency.
 
-If you launch through Xcode:
+## Documentation
 
-- add Xcode under `Privacy & Security > Accessibility`
-- add Xcode under `Privacy & Security > Screen Recording` for the mirrored content overlay
+- [Project Book](deskpins-project-book-v2.md)
+- [Product Spec](Docs/product-spec.md)
+- [Architecture](Docs/architecture.md)
+- [MVP Checklist](Docs/mvp-checklist.md)
+- [Permission Model](Docs/permission-model.md)
+- [Release Plan](Docs/release-plan.md)
 
-### 4. Review the current implementation areas
+## Contributing
 
-- `App/Support/`: menu-bar-facing app state orchestration
-- `App/MenuBarApp/`: minimal AppKit menu bar shell
-- `Core/Accessibility/`: Accessibility permission and focused-window reads
-- `Core/WindowCatalog/`: CoreGraphics window enumeration, filtering, and search
-- `Core/Pinned/`: pinned-window model, identity, ordering, invalidation state, and JSON persistence
-- `Core/Pinning/`: pinning workflows and workspace-level refresh coordination
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
-## Branch Guide
+## License
 
-Use descriptive branches rather than `v1`, `v2`, or `v3`.
-
-- `codex/feat-project-init`: earliest bootstrap history; kept for traceability, not the branch to continue on
-- `codex/feat-project-init-pr`: the stable review branch for the current bootstrap PR
-- `codex/feat-pinning-workspace-state`: a completed local feature branch that introduced the workspace coordinator and has already been folded forward
-- `codex/feat-pinned-store-persistence`: a completed local feature branch that introduced JSON persistence and has already been folded forward
-- `codex/feat-menu-bar-app-shell`: the stable branch for menu-bar shell, badge overlay, and hotkey work
-- `codex/feat-screen-recording-overlay`: the current experimental branch for mirrored pinned-content overlays using Screen Recording
-
-Branch naming format:
-
-- `codex/feat-<topic>` for new functionality
-- `codex/fix-<topic>` for bug fixes
-- `codex/refactor-<topic>` for internal restructuring
-
-Reason:
-
-- names stay tied to the actual purpose of the work
-- review is easier than opaque version labels
-- cross-thread branch prompts are easier to interpret
-
-## Important Bootstrap Notes
-
-- This project intentionally avoids private macOS APIs.
-- The current code is structured so that UI wiring can be added later without moving business logic into the app layer.
-- Current testing uses smoke-test executables instead of XCTest because the active local environment is bootstrap-oriented and CLT-friendly.
-
-## Project Docs
-
-See these documents for the current source of truth:
-
-- `deskpins-project-book-v2.md`
-- `Docs/product-spec.md`
-- `Docs/architecture.md`
-- `Docs/mvp-checklist.md`
-- `Docs/permission-model.md`
-- `Docs/release-plan.md`
-
-## Suggested Review Flow
-
-For this bootstrap PR, the fastest review path is:
-
-1. read `Docs/architecture.md`
-2. skim `App/Support/` and `App/MenuBarApp/`
-3. run `./Scripts/verify.sh`
-4. optionally launch `swift run DeskPinsMenuBarApp`
-5. inspect the smoke tests in `Tools/`
-
-That should give you a good picture of the current foundation before settings, richer ordering controls, and a dedicated Xcode app target are added.
+MIT. See [LICENSE](LICENSE).

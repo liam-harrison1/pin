@@ -1,5 +1,7 @@
 @preconcurrency import AppKit
+@preconcurrency import CoreGraphics
 import Foundation
+import OSLog
 import DeskPinsAccessibility
 import DeskPinsAppSupport
 import DeskPinsHotKey
@@ -33,12 +35,6 @@ enum DeskPinsMenuBarApp {
 // swiftlint:disable type_body_length
 @MainActor
 private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private enum OverlayInteractionLeaseMode: Equatable {
-        case none
-        case acquiring(ownerID: UUID)
-        case active(ownerID: UUID)
-    }
-
     private struct OverlayDragSession {
         var pinnedWindowID: UUID
         var reference: PinnedWindowReference
@@ -126,14 +122,15 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private var activeOverlayDragSession: OverlayDragSession?
     private var dragFlushWorkItem: DispatchWorkItem?
     private var postDragRefreshWorkItem: DispatchWorkItem?
+    private let logger = Logger(subsystem: "com.deskpins.app", category: "menu-bar")
     private let dragFlushInterval: TimeInterval = 1.0 / 60.0
     private let postDragRefreshDelay: TimeInterval = 0.06
+    private let leaseHandshakeTimeout: TimeInterval = 0.45
+    private let leaseHandshakeRetryDelay: TimeInterval = 0.14
     private let leaseUnknownFocusGraceInterval: TimeInterval = 0.12
     private var isStatusMenuOpen = false
-    private var overlayInteractionLeaseMode: OverlayInteractionLeaseMode = .none
-    private var suppressedLeaseWindowIDs: Set<UUID> = []
+    private var overlayLeaseState = OverlayInteractionLeaseState()
     private var leaseHandshakeTask: Task<Void, Never>?
-    private var leaseFocusUnknownSince: Date?
     private var backgroundRefreshTick = 0
     private let idleRefreshEveryNTicks = 4
 
@@ -148,7 +145,11 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             try installHotKeys()
             updateMenuPresentation()
             startRefreshTimer()
+            logger.log("DeskPins menu bar app launched successfully.")
         } catch {
+            logger.error(
+                "DeskPins startup failed: \(error.localizedDescription, privacy: .public)"
+            )
             updateMenuPresentation()
             presentDeskPinsAlert(
                 title: "DeskPins failed to start cleanly",
@@ -569,20 +570,22 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             return
         }
 
-        switch overlayInteractionLeaseMode {
+        switch overlayLeaseState.mode {
         case .none:
             stateController.clearOverlayInteractionLease()
         case .acquiring(let ownerID):
             stateController.setOverlayInteractionLease(
                 ownerID: ownerID,
                 active: false,
-                suppressedWindowIDs: suppressedLeaseWindowIDs
+                suppressedWindowIDs: []
             )
         case .active(let ownerID):
+            let dynamicSuppressedWindowIDs = stateController
+                .overlappingPinnedWindowIDs(for: ownerID)
             stateController.setOverlayInteractionLease(
                 ownerID: ownerID,
                 active: true,
-                suppressedWindowIDs: suppressedLeaseWindowIDs
+                suppressedWindowIDs: dynamicSuppressedWindowIDs
             )
         }
     }
@@ -625,6 +628,9 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
                 updateOverlaysOnly()
             }
         } catch {
+            logger.debug(
+                "Background refresh failed: \(error.localizedDescription, privacy: .public)"
+            )
             reconcileOverlayInteractionLeaseMode()
             if isStatusMenuOpen {
                 updateMenuPresentation()
@@ -665,7 +671,7 @@ private extension DeskPinsMenuBarAppDelegate {
         case .dragBegan(let id, let reference):
             postDragRefreshWorkItem?.cancel()
             postDragRefreshWorkItem = nil
-            clearOverlayInteractionLeaseMode()
+            clearOverlayInteractionLeaseMode(reason: "drag-began")
             guard let stateController else {
                 return
             }
@@ -694,7 +700,7 @@ private extension DeskPinsMenuBarAppDelegate {
             overlayManager.endInteractionDrag(for: id)
             endActiveOverlayDragSession(commitPendingDrag: false)
             schedulePostDragRefresh()
-        case .contentInteractionRequested(let id, _):
+        case .contentInteractionRequested(let id, _, let screenPoint):
             guard let stateController else {
                 return
             }
@@ -702,10 +708,14 @@ private extension DeskPinsMenuBarAppDelegate {
             _ = stateController.markPinnedWindowInteracted(id: id)
             enterOverlayLeaseAcquiring(for: id)
             updateOverlaysOnly()
-            startOverlayLeaseHandshake(for: id)
+            startOverlayLeaseHandshake(
+                for: id,
+                replayScreenPoint: screenPoint,
+                replayCapturedAt: .now
+            )
         case .badgeClicked(let id, _):
             endActiveOverlayDragSession(commitPendingDrag: false)
-            clearOverlayInteractionLeaseMode()
+            clearOverlayInteractionLeaseMode(reason: "badge-clicked")
             guard let stateController else {
                 return
             }
@@ -724,26 +734,54 @@ private extension DeskPinsMenuBarAppDelegate {
 
     func enterOverlayLeaseAcquiring(for id: UUID) {
         leaseHandshakeTask?.cancel()
-        overlayInteractionLeaseMode = .acquiring(ownerID: id)
-        suppressedLeaseWindowIDs = stateController?.overlappingPinnedWindowIDs(for: id) ?? []
+        let suppressedWindowIDs = stateController?.overlappingPinnedWindowIDs(for: id) ?? []
+        overlayLeaseState.enterAcquiring(
+            ownerID: id,
+            suppressedWindowIDs: suppressedWindowIDs,
+            at: .now
+        )
+        logger.log(
+            "Overlay lease acquiring started for \(id.uuidString, privacy: .public)."
+        )
     }
 
     func activateOverlayLease(for id: UUID) {
-        guard case .acquiring(let ownerID) = overlayInteractionLeaseMode,
-              ownerID == id else {
+        guard overlayLeaseState.activate(ownerID: id) else {
             return
         }
-        overlayInteractionLeaseMode = .active(ownerID: id)
-        leaseFocusUnknownSince = nil
+        if let elapsedMS = overlayLeaseState.handshakeElapsedMilliseconds() {
+            logger.log(
+                "Overlay lease activated for \(id.uuidString, privacy: .public) in \(elapsedMS, privacy: .public)ms."
+            )
+        } else {
+            logger.log(
+                "Overlay lease activated for \(id.uuidString, privacy: .public)."
+            )
+        }
     }
 
-    func clearOverlayInteractionLeaseMode() {
+    func clearOverlayInteractionLeaseMode(reason: String = "reset") {
+        let previousMode = overlayLeaseState.mode
+        let elapsedMS = overlayLeaseState.handshakeElapsedMilliseconds()
+
         leaseHandshakeTask?.cancel()
         leaseHandshakeTask = nil
-        overlayInteractionLeaseMode = .none
-        suppressedLeaseWindowIDs.removeAll()
-        leaseFocusUnknownSince = nil
+        overlayLeaseState.clear()
         stateController?.clearOverlayInteractionLease()
+
+        guard previousMode != .none else {
+            return
+        }
+
+        if let elapsedMS {
+            logger.log(
+                "Overlay lease cleared from \(previousMode.label, privacy: .public) (\(reason, privacy: .public), elapsed: \(elapsedMS, privacy: .public)ms)."
+            )
+        } else {
+            logger.log(
+                "Overlay lease cleared from \(previousMode.label, privacy: .public) (\(reason, privacy: .public))."
+            )
+        }
     }
 
     func reconcileOverlayInteractionLeaseMode() {
@@ -751,12 +789,12 @@ private extension DeskPinsMenuBarAppDelegate {
             return
         }
 
-        switch overlayInteractionLeaseMode {
+        switch overlayLeaseState.mode {
         case .none:
             return
         case .acquiring(let ownerID):
             guard stateController.store.window(id: ownerID) != nil else {
-                clearOverlayInteractionLeaseMode()
+                clearOverlayInteractionLeaseMode(reason: "owner-missing-while-acquiring")
                 return
             }
 
@@ -769,37 +807,51 @@ private extension DeskPinsMenuBarAppDelegate {
                 updateOverlaysOnly()
                 return
             }
-
-            clearOverlayInteractionLeaseMode()
-            updateOverlaysOnly()
+            // During acquiring we may still observe the previous focused pinned window for a short
+            // period. Keep waiting for handshake timeout/retries instead of clearing immediately.
+            return
         case .active(let ownerID):
             guard stateController.store.window(id: ownerID) != nil else {
-                clearOverlayInteractionLeaseMode()
+                clearOverlayInteractionLeaseMode(reason: "owner-missing-while-active")
                 updateOverlaysOnly()
                 return
             }
 
             if !isPinnedWindowApplicationFrontmost(id: ownerID) {
-                leaseFocusUnknownSince = nil
-                clearOverlayInteractionLeaseMode()
+                if let nextPinnedWindowID = currentLiveFocusedPinnedWindowID(),
+                   nextPinnedWindowID != ownerID {
+                    beginOverlayLeaseHandoff(
+                        to: nextPinnedWindowID,
+                        reason: "handoff-frontmost-changed"
+                    )
+                    return
+                }
+                overlayLeaseState.clearFocusUnknown()
+                clearOverlayInteractionLeaseMode(reason: "owner-app-not-frontmost")
                 updateOverlaysOnly()
                 return
             }
 
             let focusedPinnedWindowID = currentLiveFocusedPinnedWindowID()
             if focusedPinnedWindowID == ownerID {
-                leaseFocusUnknownSince = nil
+                overlayLeaseState.clearFocusUnknown()
+                return
+            }
+
+            if let focusedPinnedWindowID,
+               focusedPinnedWindowID != ownerID {
+                beginOverlayLeaseHandoff(
+                    to: focusedPinnedWindowID,
+                    reason: "handoff-focus-moved"
+                )
                 return
             }
 
             if focusedPinnedWindowID == nil {
-                if leaseFocusUnknownSince == nil {
-                    leaseFocusUnknownSince = .now
-                    return
-                }
-
-                if let leaseFocusUnknownSince,
-                   Date.now.timeIntervalSince(leaseFocusUnknownSince) < leaseUnknownFocusGraceInterval {
+                overlayLeaseState.markFocusUnknownIfNeeded()
+                if overlayLeaseState.unknownFocusWithinGracePeriod(
+                    graceInterval: leaseUnknownFocusGraceInterval
+                ) {
                     return
                 }
             }
@@ -807,14 +859,19 @@ private extension DeskPinsMenuBarAppDelegate {
             guard focusedPinnedWindowID != ownerID else {
                 return
             }
-            leaseFocusUnknownSince = nil
-            clearOverlayInteractionLeaseMode()
+            overlayLeaseState.clearFocusUnknown()
+            clearOverlayInteractionLeaseMode(reason: "focus-moved-away")
             updateOverlaysOnly()
         }
     }
 
-    func startOverlayLeaseHandshake(for id: UUID) {
+    func startOverlayLeaseHandshake(
+        for id: UUID,
+        replayScreenPoint: PinnedOverlayScreenPoint?,
+        replayCapturedAt: Date
+    ) {
         leaseHandshakeTask?.cancel()
+        overlayLeaseState.ensureHandshakeStarted()
         leaseHandshakeTask = Task { @MainActor [weak self] in
             guard let self,
                   let stateController else {
@@ -824,20 +881,39 @@ private extension DeskPinsMenuBarAppDelegate {
             do {
                 _ = try stateController.activatePinnedWindowLightweight(id: id)
             } catch {
-                self.clearOverlayInteractionLeaseMode()
+                self.logger.error(
+                    "Overlay lease activation failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+                self.clearOverlayInteractionLeaseMode(reason: "activation-error")
                 self.updateOverlaysOnly()
                 return
             }
 
-            let timeout = Date.now.addingTimeInterval(0.24)
+            let timeout = Date.now.addingTimeInterval(self.leaseHandshakeTimeout)
+            var nextRetryAt = Date.now.addingTimeInterval(self.leaseHandshakeRetryDelay)
+            var retryCount = 0
             while Date.now < timeout {
                 if Task.isCancelled {
                     return
                 }
 
+                if Date.now >= nextRetryAt {
+                    retryCount += 1
+                    nextRetryAt = Date.now.addingTimeInterval(self.leaseHandshakeRetryDelay)
+                    _ = try? stateController.activatePinnedWindowLightweight(id: id)
+                    self.logger.debug(
+                        "Overlay lease handshake retried activation for \(id.uuidString, privacy: .public), retry=\(retryCount, privacy: .public)."
+                    )
+                }
+
                 if self.currentLiveFocusedPinnedWindowID() == id {
                     self.activateOverlayLease(for: id)
                     self.updateOverlaysOnly()
+                    self.replayPrimaryClickIfNeeded(
+                        at: replayScreenPoint,
+                        ownerID: id,
+                        capturedAt: replayCapturedAt
+                    )
                     self.leaseHandshakeTask = nil
                     return
                 }
@@ -845,11 +921,116 @@ private extension DeskPinsMenuBarAppDelegate {
                 try? await Task.sleep(nanoseconds: 30_000_000)
             }
 
-            self.clearOverlayInteractionLeaseMode()
+            self.logger.log(
+                "Overlay lease handshake timed out for \(id.uuidString, privacy: .public)."
+            )
+            self.clearOverlayInteractionLeaseMode(reason: "handshake-timeout")
             self.updateOverlaysOnly()
             self.leaseHandshakeTask = nil
             return
         }
+    }
+
+    func beginOverlayLeaseHandoff(
+        to ownerID: UUID,
+        reason: String
+    ) {
+        guard let stateController,
+              stateController.store.window(id: ownerID) != nil else {
+            return
+        }
+
+        logger.debug(
+            "Overlay lease handoff to \(ownerID.uuidString, privacy: .public) (\(reason, privacy: .public))."
+        )
+        // Keep lease transitions inside acquiring/active to avoid a transient
+        // `.none` phase that can briefly churn overlay visibility.
+        enterOverlayLeaseAcquiring(for: ownerID)
+        updateOverlaysOnly()
+        startOverlayLeaseHandshake(
+            for: ownerID,
+            replayScreenPoint: nil,
+            replayCapturedAt: .now
+        )
+    }
+
+    func replayPrimaryClickIfNeeded(
+        at screenPoint: PinnedOverlayScreenPoint?,
+        ownerID: UUID,
+        capturedAt: Date
+    ) {
+        guard let screenPoint else {
+            return
+        }
+
+        guard Date.now.timeIntervalSince(capturedAt) <= 0.24 else {
+            logger.debug(
+                "Overlay lease click replay skipped for \(ownerID.uuidString, privacy: .public): stale replay window."
+            )
+            return
+        }
+
+        guard isPinnedWindowApplicationFrontmost(id: ownerID) else {
+            return
+        }
+
+        let appKitPoint = CGPoint(
+            x: screenPoint.x,
+            y: screenPoint.y
+        )
+        let currentMousePoint = NSEvent.mouseLocation
+        let deltaX = currentMousePoint.x - appKitPoint.x
+        let deltaY = currentMousePoint.y - appKitPoint.y
+        let distance = sqrt((deltaX * deltaX) + (deltaY * deltaY))
+        guard distance <= 28 else {
+            logger.debug(
+                "Overlay lease click replay skipped for \(ownerID.uuidString, privacy: .public): pointer moved \(distance, privacy: .public)."
+            )
+            return
+        }
+
+        let cgPoint = quartzEventPoint(fromAppKitPoint: appKitPoint)
+        guard let eventSource = CGEventSource(stateID: .combinedSessionState),
+              let mouseDown = CGEvent(
+                mouseEventSource: eventSource,
+                mouseType: .leftMouseDown,
+                mouseCursorPosition: cgPoint,
+                mouseButton: .left
+              ),
+              let mouseUp = CGEvent(
+                mouseEventSource: eventSource,
+                mouseType: .leftMouseUp,
+                mouseCursorPosition: cgPoint,
+                mouseButton: .left
+              ) else {
+            logger.debug(
+                "Overlay lease click replay skipped for \(ownerID.uuidString, privacy: .public): cannot construct CGEvent."
+            )
+            return
+        }
+
+        mouseDown.post(tap: .cghidEventTap)
+        mouseUp.post(tap: .cghidEventTap)
+        logger.debug(
+            "Overlay lease replayed consumed click for \(ownerID.uuidString, privacy: .public) at (\(screenPoint.x, privacy: .public), \(screenPoint.y, privacy: .public))."
+        )
+    }
+
+    func quartzEventPoint(fromAppKitPoint point: CGPoint) -> CGPoint {
+        let desktopFrame = NSScreen.screens
+            .map(\.frame)
+            .reduce(CGRect.null) { partialResult, frame in
+                partialResult.union(frame)
+            }
+        guard !desktopFrame.isNull else {
+            return point
+        }
+
+        let quartzY = desktopFrame.maxY - point.y
+        return CGPoint(
+            x: min(max(point.x, desktopFrame.minX), desktopFrame.maxX),
+            y: min(max(quartzY, desktopFrame.minY), desktopFrame.maxY)
+        )
     }
 
     func currentLiveFocusedPinnedWindowID() -> UUID? {

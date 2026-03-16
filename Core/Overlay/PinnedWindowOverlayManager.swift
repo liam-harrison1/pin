@@ -42,8 +42,22 @@ public enum PinnedWindowOverlayInteractionEvent: Sendable, Equatable {
         deltaY: Double
     )
     case dragEnded(id: UUID, reference: PinnedWindowReference)
-    case contentInteractionRequested(id: UUID, reference: PinnedWindowReference)
+    case contentInteractionRequested(
+        id: UUID,
+        reference: PinnedWindowReference,
+        screenPoint: PinnedOverlayScreenPoint
+    )
     case badgeClicked(id: UUID, reference: PinnedWindowReference)
+}
+
+public struct PinnedOverlayScreenPoint: Sendable, Equatable {
+    public var x: Double
+    public var y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
 }
 
 public typealias PinnedWindowOverlayInteractionHandler = @MainActor (
@@ -194,7 +208,7 @@ public final class PinnedWindowOverlayManager {
                     force: requiresFrontReorder,
                     includePreview: false,
                     includeDragHandle: true,
-                    includeBadge: true
+                    includeBadge: false
                 )
                 continue
             case .suppressed:
@@ -204,6 +218,8 @@ public final class PinnedWindowOverlayManager {
                     force: requiresFrontReorder,
                     includePreview: false,
                     includeDragHandle: false,
+                    // Keep a lightweight pin anchor visible so suppressed windows
+                    // remain discoverable/clickable without restoring full overlay.
                     includeBadge: true
                 )
                 continue
@@ -740,16 +756,17 @@ private final class PinnedDragHandleWindow: NSPanel {
             return fullFrame
         }
 
-        // Keep direct-mode drag capture area narrow so top toolbar controls stay usable.
-        let railHeight = min(30, max(20, fullFrame.height * 0.08))
-        let preferredRailWidth = min(180, max(88, fullFrame.width * 0.18))
-        let railWidth = min(fullFrame.width, preferredRailWidth)
-        return CGRect(
-            x: fullFrame.midX - (railWidth / 2),
-            y: fullFrame.maxY - railHeight - 6,
-            width: railWidth,
-            height: railHeight
+        // Keep direct-mode drag capture area outside the window so title-bar controls remain clickable.
+        let railSize = CGSize(width: 60, height: 22)
+        let preferredOrigin = CGPoint(
+            x: fullFrame.maxX - railSize.width - 6,
+            y: fullFrame.maxY + 6
+        )
+        let preferredFrame = CGRect(
+            origin: preferredOrigin,
+            size: railSize
         ).integral
+        return PinnedOverlayCoordinateSpace.clampToDesktop(preferredFrame)
     }
 }
 
@@ -805,14 +822,32 @@ private final class PinnedDragHandleView: NSView {
             guard !isInDirectInteractionMode else {
                 return
             }
+            let screenPoint = screenLocation(for: event)
             interactionHandler?(
                 .contentInteractionRequested(
                     id: target.id,
-                    reference: target.reference
+                    reference: target.reference,
+                    screenPoint: PinnedOverlayScreenPoint(
+                        x: Double(screenPoint.x),
+                        y: Double(screenPoint.y)
+                    )
                 )
             )
         case .edgeGuard:
-            return
+            guard !isInDirectInteractionMode else {
+                return
+            }
+            let screenPoint = screenLocation(for: event)
+            interactionHandler?(
+                .contentInteractionRequested(
+                    id: target.id,
+                    reference: target.reference,
+                    screenPoint: PinnedOverlayScreenPoint(
+                        x: Double(screenPoint.x),
+                        y: Double(screenPoint.y)
+                    )
+                )
+            )
         }
     }
 
@@ -1175,12 +1210,39 @@ private func framesApproximatelyEqual(
 }
 
 private enum PinnedOverlayCoordinateSpace {
-    static func appKitFrame(from captureFrame: CGRect) -> CGRect {
-        let desktopFrame = NSScreen.screens
+    static func desktopFrame() -> CGRect {
+        NSScreen.screens
             .map(\.frame)
             .reduce(CGRect.null) { partialResult, frame in
                 partialResult.union(frame)
             }
+    }
+
+    static func clampToDesktop(
+        _ frame: CGRect,
+        padding: CGFloat = 2
+    ) -> CGRect {
+        let desktopFrame = desktopFrame()
+        guard !desktopFrame.isNull else {
+            return frame
+        }
+
+        let minX = desktopFrame.minX + padding
+        let maxX = desktopFrame.maxX - frame.width - padding
+        let minY = desktopFrame.minY + padding
+        let maxY = desktopFrame.maxY - frame.height - padding
+        let clampedX = min(max(frame.origin.x, minX), maxX)
+        let clampedY = min(max(frame.origin.y, minY), maxY)
+        return CGRect(
+            x: clampedX,
+            y: clampedY,
+            width: frame.width,
+            height: frame.height
+        ).integral
+    }
+
+    static func appKitFrame(from captureFrame: CGRect) -> CGRect {
+        let desktopFrame = desktopFrame()
 
         guard !desktopFrame.isNull else {
             return captureFrame

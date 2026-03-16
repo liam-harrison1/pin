@@ -1,6 +1,6 @@
 # DeskPins for macOS 项目书 v2
 
-> 本文档是基于现有研究稿 [deskpins-trying-on-mac.md](/Users/lzc/Documents/科研/deskpins尝试/deskpins-trying-on-mac.md) 的重写版。
+> 本文档是基于现有研究稿 [deskpins-trying-on-mac.md](deskpins-trying-on-mac.md) 的重写版。
 > 目标不是重复“所有调研细节”，而是产出一份可以直接指导后续 MCP 协作、产品收敛、工程实施与验收的落地总纲。
 
 ## 1. 文档目标

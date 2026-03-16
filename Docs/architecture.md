@@ -41,6 +41,7 @@ Owns:
 - app startup
 - menu bar status item
 - app-support state orchestration for menu-driven actions
+- lease state transitions through a dedicated `OverlayInteractionLeaseState` model
 - settings entry
 - lifecycle wiring
 
@@ -54,6 +55,7 @@ Owns:
 - window attribute reads
 - observer registration
 - window-level actions such as raise when appropriate
+- window activation and movement matching with `windowNumber`-first lookup and title/bounds fallback scoring
 
 ### `Core/WindowCatalog/`
 
@@ -175,6 +177,12 @@ Polling goals:
 - size
 - visibility
 - continued identity match
+
+Interaction lease reliability notes:
+
+- keep lease transitions explicit (`none` -> `acquiring` -> `active`) and clear them with reasoned paths
+- keep a bounded handshake timeout with one retry before fallback to `none`
+- log lease lifecycle timing and timeout/error paths for regression diagnosis
 
 ## Permission Model
 
