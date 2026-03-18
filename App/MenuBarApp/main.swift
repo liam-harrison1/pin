@@ -103,6 +103,11 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         action: #selector(requestScreenRecordingPermission),
         keyEquivalent: ""
     )
+    private let settingsItem = NSMenuItem(
+        title: "Settings...",
+        action: #selector(openSettings),
+        keyEquivalent: ","
+    )
     private let quitItem = NSMenuItem(
         title: "Quit DeskPins",
         action: #selector(quit),
@@ -110,6 +115,8 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     )
 
     private let overlayManager = PinnedWindowOverlayManager()
+    private let settings = DeskPinsSettings.shared
+    private var settingsPanelController: DeskPinsSettingsPanelController?
     private var stateController: LiveDeskPinsStateController?
     private var shouldReopenMenuAfterRefresh = false
     private var dynamicPinnedWindowItems: [NSMenuItem] = []
@@ -183,6 +190,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         togglePinItem.target = self
         requestPermissionItem.target = self
         requestScreenRecordingItem.target = self
+        settingsItem.target = self
         quitItem.target = self
         statusItem.button?.target = self
         statusItem.button?.action = #selector(openStatusMenu)
@@ -408,6 +416,20 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     @objc
+    private func openSettings() {
+        if settingsPanelController == nil {
+            settingsPanelController = DeskPinsSettingsPanelController(
+                settings: settings
+            ) { [weak self] in
+                self?.settingsPanelController = nil
+                self?.syncSettingsToStateController()
+                self?.updateOverlaysOnly()
+            }
+        }
+        settingsPanelController?.show()
+    }
+
+    @objc
     private func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -549,20 +571,33 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         menu.addItem(togglePinItem)
         menu.addItem(requestPermissionItem)
         menu.addItem(requestScreenRecordingItem)
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
     }
 
     private func updateOverlays() {
         applyOverlayInteractionLeaseToStateController()
-        let targets = stateController?.overlayTargets() ?? []
+        syncSettingsToStateController()
+        let targets = stateController?.overlayTargets(
+            overlayOpacity: settings.overlayOpacity,
+            overlayClickThrough: settings.overlayClickThrough
+        ) ?? []
         overlayManager.updateOverlays(with: targets)
     }
 
     private func updateOverlaysOnly() {
         applyOverlayInteractionLeaseToStateController()
-        let targets = stateController?.overlayTargets() ?? []
+        syncSettingsToStateController()
+        let targets = stateController?.overlayTargets(
+            overlayOpacity: settings.overlayOpacity,
+            overlayClickThrough: settings.overlayClickThrough
+        ) ?? []
         overlayManager.updateOverlays(with: targets)
+    }
+
+    private func syncSettingsToStateController() {
+        stateController?.orderingMode = settings.orderingMode
     }
 
     private func applyOverlayInteractionLeaseToStateController() {

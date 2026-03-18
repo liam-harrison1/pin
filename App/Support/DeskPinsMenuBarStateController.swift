@@ -72,6 +72,8 @@ public final class DeskPinsMenuBarStateController<
 
     public private(set) var store: PinnedWindowStore
     public private(set) var workspaceSnapshot: PinningWorkspaceSnapshot?
+    /// Controls the sort order used when presenting pinned windows to the UI.
+    public var orderingMode: PinnedWindowOrderingMode = .recentInteractionFirst
     private var lastFrontmostPinnedWindowID: UUID?
     private var overlayLeaseOwnerID: UUID?
     private var isOverlayLeaseActive = false
@@ -177,7 +179,7 @@ public final class DeskPinsMenuBarStateController<
             visibleEntries: snapshot.visibleEntries,
             at: snapshot.refreshedAt
         )
-        snapshot.pinnedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+        snapshot.pinnedWindows = store.orderedWindows(mode: orderingMode)
 
         workspaceSnapshot = snapshot
         return snapshot
@@ -300,7 +302,7 @@ public final class DeskPinsMenuBarStateController<
     }
 
     public func presentation() -> DeskPinsMenuBarPresentation {
-        let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+        let orderedWindows = store.orderedWindows(mode: orderingMode)
         let visibleEntries = workspaceSnapshot?.visibleEntries ?? []
 
         return DeskPinsMenuBarPresentation(
@@ -326,7 +328,10 @@ public final class DeskPinsMenuBarStateController<
         )
     }
 
-    public func overlayTargets() -> [PinnedWindowOverlayTarget] {
+    public func overlayTargets(
+        overlayOpacity: Double = 0.92,
+        overlayClickThrough: Bool = false
+    ) -> [PinnedWindowOverlayTarget] {
         let visibleEntries = workspaceSnapshot?.visibleEntries ?? []
         let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
 
@@ -346,7 +351,9 @@ public final class DeskPinsMenuBarStateController<
                     ),
                     isStale: pinnedWindow.isInvalidated,
                     renderPolicy: renderPolicy,
-                    reference: pinnedWindow.reference
+                    reference: pinnedWindow.reference,
+                    overlayOpacity: overlayOpacity,
+                    overlayClickThrough: overlayClickThrough
                 )
             }
 
@@ -365,14 +372,16 @@ public final class DeskPinsMenuBarStateController<
                 ),
                 isStale: pinnedWindow.isInvalidated,
                 renderPolicy: renderPolicy,
-                reference: pinnedWindow.reference
+                reference: pinnedWindow.reference,
+                overlayOpacity: overlayOpacity,
+                overlayClickThrough: overlayClickThrough
             )
         }
     }
 
     public func overlappingPinnedWindowIDs(for id: UUID) -> Set<UUID> {
         let visibleEntries = workspaceSnapshot?.visibleEntries ?? []
-        let orderedWindows = store.orderedWindows(mode: .recentInteractionFirst)
+        let orderedWindows = store.orderedWindows(mode: orderingMode)
 
         guard let owner = orderedWindows.first(where: { $0.id == id }),
               let ownerFrame = liveFrameForPinnedWindow(owner, visibleEntries: visibleEntries) else {

@@ -110,14 +110,14 @@ if (( ${#swift_files[@]} > 0 )); then
 
   if [[ -f "Package.swift" ]]; then
     say "swift build"
-    swift build
+    swift build --disable-sandbox
 
-    if swift package dump-package >/dev/null 2>&1; then
+    if swift package --disable-sandbox dump-package >/dev/null 2>&1; then
       for smoke_dir in Tools/*SmokeTests; do
         if [[ -d "$smoke_dir" ]]; then
           smoke_name="$(basename "$smoke_dir")"
           say "swift run $smoke_name"
-          swift run "$smoke_name"
+          swift run --disable-sandbox "$smoke_name"
         fi
       done
     fi

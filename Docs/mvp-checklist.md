@@ -24,7 +24,7 @@
 - [x] Add a global shortcut for toggling the current focused window pin.
 - [x] Add a Screen Recording permission request entry for the content-overlay branch.
 - [x] Add basic app logging for startup and action failures.
-- [ ] Add a settings surface for shortcut and ordering behavior.
+- [x] Add a settings surface for shortcut and ordering behavior.
 
 ## Phase 2: Pin Current Window
 
@@ -41,9 +41,9 @@
 - [x] Add pin badge feedback.
 - [x] Add a floating pin badge that follows pinned windows.
 - [x] Add a mirrored pinned-content overlay prototype behind Screen Recording permission.
-- [ ] Add ordering behavior based on recent interaction.
-- [ ] Add optional mode for recent pin priority.
-- [ ] Add opacity and click-through controls for pinned overlays.
+- [x] Add ordering behavior based on recent interaction.
+- [x] Add optional mode for recent pin priority.
+- [x] Add opacity and click-through controls for pinned overlays.
 
 ## Phase 4: Window List and Search
 

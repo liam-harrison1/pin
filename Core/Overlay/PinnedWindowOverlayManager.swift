@@ -15,6 +15,10 @@ public struct PinnedWindowOverlayTarget: Sendable, Equatable, Identifiable {
     public var isStale: Bool
     public var renderPolicy: PinnedWindowOverlayRenderPolicy
     public var reference: PinnedWindowReference
+    /// Opacity applied to the preview overlay window. Range 0.3...1.0.
+    public var overlayOpacity: Double
+    /// When true the preview overlay ignores mouse events (click-through).
+    public var overlayClickThrough: Bool
 
     public init(
         id: UUID,
@@ -22,7 +26,9 @@ public struct PinnedWindowOverlayTarget: Sendable, Equatable, Identifiable {
         frame: CGRect,
         isStale: Bool,
         renderPolicy: PinnedWindowOverlayRenderPolicy = .mirrorVisible,
-        reference: PinnedWindowReference
+        reference: PinnedWindowReference,
+        overlayOpacity: Double = 0.92,
+        overlayClickThrough: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -30,6 +36,8 @@ public struct PinnedWindowOverlayTarget: Sendable, Equatable, Identifiable {
         self.isStale = isStale
         self.renderPolicy = renderPolicy
         self.reference = reference
+        self.overlayOpacity = overlayOpacity
+        self.overlayClickThrough = overlayClickThrough
     }
 }
 
@@ -642,6 +650,8 @@ private final class PinnedPreviewWindow: NSPanel {
                 setFrame(frame, display: false)
             }
         }
+        alphaValue = CGFloat(target.overlayOpacity)
+        ignoresMouseEvents = target.overlayClickThrough
         previewView.apply(target: target)
     }
 
