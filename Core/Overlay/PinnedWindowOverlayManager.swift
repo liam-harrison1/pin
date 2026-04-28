@@ -996,7 +996,10 @@ private final class PinnedBadgeWindow: NSPanel {
         let displayFrame = PinnedOverlayCoordinateSpace.appKitFrame(from: target.frame)
         let badgeSize = CGSize(width: 28, height: 28)
         let x = displayFrame.midX - (badgeSize.width / 2)
-        let y = displayFrame.maxY - badgeSize.height - 8
+        let rawY = displayFrame.maxY + 4
+        let screenMaxY = NSScreen.screens.map(\.frame.maxY).max() ?? rawY
+        let menuBarInset: CGFloat = 24
+        let y = min(rawY, screenMaxY - badgeSize.height - menuBarInset)
         return CGRect(origin: CGPoint(x: x, y: y), size: badgeSize)
     }
 }

@@ -98,11 +98,6 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         action: #selector(requestAccessibilityPermission),
         keyEquivalent: ""
     )
-    private let requestScreenRecordingItem = NSMenuItem(
-        title: "Request Screen Recording Permission",
-        action: #selector(requestScreenRecordingPermission),
-        keyEquivalent: ""
-    )
     private let settingsItem = NSMenuItem(
         title: "Settings...",
         action: #selector(openSettings),
@@ -132,14 +127,14 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     private let logger = Logger(subsystem: "com.deskpins.app", category: "menu-bar")
     private let dragFlushInterval: TimeInterval = 1.0 / 60.0
     private let postDragRefreshDelay: TimeInterval = 0.06
-    private let leaseHandshakeTimeout: TimeInterval = 0.45
+    private let leaseHandshakeTimeout: TimeInterval = 1.5
     private let leaseHandshakeRetryDelay: TimeInterval = 0.14
     private let leaseUnknownFocusGraceInterval: TimeInterval = 0.12
     private var isStatusMenuOpen = false
     private var overlayLeaseState = OverlayInteractionLeaseState()
     private var leaseHandshakeTask: Task<Void, Never>?
     private var backgroundRefreshTick = 0
-    private let idleRefreshEveryNTicks = 4
+    private let idleRefreshEveryNTicks = 30
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
@@ -166,7 +161,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        clearPinnedWindowsForTermination()
+        clearTransientStateForTermination()
         leaseHandshakeTask?.cancel()
         leaseHandshakeTask = nil
         endActiveOverlayDragSession(commitPendingDrag: false)
@@ -189,7 +184,6 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         unpinAllItem.target = self
         togglePinItem.target = self
         requestPermissionItem.target = self
-        requestScreenRecordingItem.target = self
         settingsItem.target = self
         quitItem.target = self
         statusItem.button?.target = self
@@ -398,24 +392,6 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
     }
 
     @objc
-    private func requestScreenRecordingPermission() {
-        let status = overlayManager.requestScreenRecordingPermission()
-
-        switch status {
-        case .granted:
-            presentDeskPinsAlert(
-                title: "Screen Recording enabled",
-                message: "DeskPins can now render pinned window content previews above other apps."
-            )
-        case .denied:
-            presentDeskPinsAlert(
-                title: "Grant Screen Recording access",
-                message: "Add the host app under Privacy & Security > Screen Recording, then relaunch DeskPins if needed."
-            )
-        }
-    }
-
-    @objc
     private func openSettings() {
         if settingsPanelController == nil {
             settingsPanelController = DeskPinsSettingsPanelController(
@@ -570,7 +546,6 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
         menu.addItem(unpinAllItem)
         menu.addItem(togglePinItem)
         menu.addItem(requestPermissionItem)
-        menu.addItem(requestScreenRecordingItem)
         menu.addItem(settingsItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
@@ -612,7 +587,7 @@ private final class DeskPinsMenuBarAppDelegate: NSObject, NSApplicationDelegate,
             stateController.setOverlayInteractionLease(
                 ownerID: ownerID,
                 active: false,
-                suppressedWindowIDs: []
+                suppressedWindowIDs: overlayLeaseState.suppressedWindowIDs
             )
         case .active(let ownerID):
             let dynamicSuppressedWindowIDs = stateController
@@ -750,11 +725,20 @@ private extension DeskPinsMenuBarAppDelegate {
             )
         case .badgeClicked(let id, _):
             endActiveOverlayDragSession(commitPendingDrag: false)
-            clearOverlayInteractionLeaseMode(reason: "badge-clicked")
             guard let stateController else {
                 return
             }
 
+            let isSuppressed = stateController.overlayTargets().contains { target in
+                target.id == id && target.renderPolicy == .suppressed
+            }
+            if isSuppressed {
+                clearOverlayInteractionLeaseMode(reason: "badge-restore")
+                updateOverlaysOnly()
+                return
+            }
+
+            clearOverlayInteractionLeaseMode(reason: "badge-clicked")
             do {
                 _ = try stateController.unpinWindow(id: id)
                 updateMenuPresentation()
@@ -1052,19 +1036,17 @@ private extension DeskPinsMenuBarAppDelegate {
     }
 
     func quartzEventPoint(fromAppKitPoint point: CGPoint) -> CGPoint {
-        let desktopFrame = NSScreen.screens
-            .map(\.frame)
-            .reduce(CGRect.null) { partialResult, frame in
-                partialResult.union(frame)
-            }
-        guard !desktopFrame.isNull else {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else {
             return point
         }
+        let screen = screens.first(where: { $0.frame.contains(point) })
+            ?? screens[0]
 
-        let quartzY = desktopFrame.maxY - point.y
+        let quartzY = screen.frame.maxY - point.y
         return CGPoint(
-            x: min(max(point.x, desktopFrame.minX), desktopFrame.maxX),
-            y: min(max(quartzY, desktopFrame.minY), desktopFrame.maxY)
+            x: min(max(point.x, screen.frame.minX), screen.frame.maxX),
+            y: min(max(quartzY, screen.frame.minY), screen.frame.maxY)
         )
     }
 
@@ -1302,7 +1284,7 @@ private extension DeskPinsMenuBarAppDelegate {
     }
 
     func handleTerminationSignal() {
-        clearPinnedWindowsForTermination()
+        clearTransientStateForTermination()
         teardownStatusUI()
         cancelSignalHandlers()
         NSApplication.shared.terminate(nil)
@@ -1329,10 +1311,9 @@ private extension DeskPinsMenuBarAppDelegate {
         signalSources.removeAll()
     }
 
-    func clearPinnedWindowsForTermination() {
+    func clearTransientStateForTermination() {
         endActiveOverlayDragSession(commitPendingDrag: false)
         clearOverlayInteractionLeaseMode()
-        _ = try? stateController?.unpinAllWindows()
     }
 }
 

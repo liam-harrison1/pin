@@ -564,7 +564,15 @@ public final class DeskPinsMenuBarStateController<
         guard let visibleEntry = visibleEntries.first(where: { entry in
             pinnedWindow.reference.likelyMatches(entry.asPinnedReference())
         }) else {
-            return nil
+            guard let storedBounds = pinnedWindow.reference.bounds else {
+                return nil
+            }
+            return CGRect(
+                x: storedBounds.x,
+                y: storedBounds.y,
+                width: storedBounds.width,
+                height: storedBounds.height
+            )
         }
 
         return CGRect(
