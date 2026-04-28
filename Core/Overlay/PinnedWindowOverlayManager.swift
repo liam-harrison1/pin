@@ -2,7 +2,9 @@
 import Foundation
 import DeskPinsPinned
 // swiftlint:disable file_length
+private let deskPinsOverlayWindowLevel = NSWindow.Level.statusBar
 public enum PinnedWindowOverlayRenderPolicy: Sendable, Equatable {
+    case badgeOnly
     case mirrorVisible
     case directInteractionOwner
     case suppressed
@@ -163,13 +165,15 @@ public final class PinnedWindowOverlayManager {
         let targetIDs = Set(targets.map(\.id))
         let desiredTargetOrder = targets.map(\.id)
         let requiresFrontReorder = desiredTargetOrder != currentTargetOrder
-        let screenRecordingStatus = permissionChecker.currentStatus()
         let topTargetID = desiredTargetOrder.first
         let hasVisiblePreviewTarget = targets.contains { target in
             target.renderPolicy == .mirrorVisible
         }
+        let screenRecordingStatus = hasVisiblePreviewTarget
+            ? permissionChecker.currentStatus()
+            : ScreenRecordingPermissionStatus.denied
 
-        if screenRecordingStatus != .granted || targets.isEmpty {
+        if !hasVisiblePreviewTarget || targets.isEmpty {
             if !arePreviewCapturesSuppressed {
                 arePreviewCapturesSuppressed = true
                 Task { [previewCapturer] in
@@ -209,6 +213,16 @@ public final class PinnedWindowOverlayManager {
             }
 
             switch target.renderPolicy {
+            case .badgeOnly:
+                cancelCapture(for: target.id)
+                bundle.enterBadgeOnlyMode()
+                bundle.orderFrontIfNeeded(
+                    force: requiresFrontReorder,
+                    includePreview: false,
+                    includeDragHandle: false,
+                    includeBadge: true
+                )
+                continue
             case .directInteractionOwner:
                 cancelCapture(for: target.id)
                 bundle.enterDirectInteractionMode()
@@ -416,6 +430,7 @@ public final class PinnedWindowOverlayManager {
 @MainActor
 private final class PinnedOverlayBundle {
     private enum InteractionMode {
+        case badgeOnly
         case mirror
         case directOwner
         case suppressed
@@ -439,6 +454,8 @@ private final class PinnedOverlayBundle {
         )
         badgeWindow = PinnedBadgeWindow(target: target)
         badgeWindow.setInteractionHandler(interactionHandler)
+        previewWindow.addChildWindow(badgeWindow, ordered: .above)
+        previewWindow.addChildWindow(dragHandleWindow, ordered: .above)
         apply(target: target)
     }
 
@@ -500,9 +517,11 @@ private final class PinnedOverlayBundle {
     }
 
     func close() {
-        previewWindow.close()
-        dragHandleWindow.close()
+        previewWindow.removeChildWindow(badgeWindow)
+        previewWindow.removeChildWindow(dragHandleWindow)
         badgeWindow.close()
+        dragHandleWindow.close()
+        previewWindow.close()
     }
 
     func setInteractionHandler(
@@ -573,6 +592,16 @@ private final class PinnedOverlayBundle {
         dragHandleWindow.setDirectInteractionMode(true)
     }
 
+    func enterBadgeOnlyMode() {
+        guard interactionMode != .badgeOnly else {
+            return
+        }
+        interactionMode = .badgeOnly
+        previewWindow.orderOut(nil)
+        dragHandleWindow.orderOut(nil)
+        dragHandleWindow.setDirectInteractionMode(false)
+    }
+
     func enterSuppressedMode() {
         guard interactionMode != .suppressed else {
             return
@@ -634,7 +663,7 @@ private final class PinnedPreviewWindow: NSPanel {
             .fullScreenAuxiliary,
             .stationary
         ]
-        level = .floating
+        level = deskPinsOverlayWindowLevel
         contentView = previewView
 
         apply(target: target)
@@ -713,7 +742,7 @@ private final class PinnedDragHandleWindow: NSPanel {
             .fullScreenAuxiliary,
             .stationary
         ]
-        level = .floating
+        level = deskPinsOverlayWindowLevel
         contentView = dragHandleView
         dragHandleView.setInteractionHandler(interactionHandler)
         apply(target: target)
@@ -941,7 +970,7 @@ private final class PinnedBadgeWindow: NSPanel {
             .fullScreenAuxiliary,
             .stationary
         ]
-        level = .floating
+        level = deskPinsOverlayWindowLevel
         contentView = badgeView
         apply(target: target)
     }
@@ -1228,19 +1257,32 @@ private enum PinnedOverlayCoordinateSpace {
             }
     }
 
+    private static func screenContaining(cgFrame: CGRect) -> NSScreen? {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return nil }
+        let primaryScreen = screens[0]
+        let desktopFrame = desktopFrame()
+        let midpoint = CGPoint(
+            x: cgFrame.midX,
+            y: desktopFrame.maxY - cgFrame.midY
+        )
+        return screens.first { $0.frame.contains(midpoint) } ?? primaryScreen
+    }
+
     static func clampToDesktop(
         _ frame: CGRect,
         padding: CGFloat = 2
     ) -> CGRect {
-        let desktopFrame = desktopFrame()
-        guard !desktopFrame.isNull else {
+        let screenFrame = screenContaining(cgFrame: frame)?.frame
+            ?? desktopFrame()
+        guard !screenFrame.isNull else {
             return frame
         }
 
-        let minX = desktopFrame.minX + padding
-        let maxX = desktopFrame.maxX - frame.width - padding
-        let minY = desktopFrame.minY + padding
-        let maxY = desktopFrame.maxY - frame.height - padding
+        let minX = screenFrame.minX + padding
+        let maxX = screenFrame.maxX - frame.width - padding
+        let minY = screenFrame.minY + padding
+        let maxY = screenFrame.maxY - frame.height - padding
         let clampedX = min(max(frame.origin.x, minX), maxX)
         let clampedY = min(max(frame.origin.y, minY), maxY)
         return CGRect(
@@ -1252,15 +1294,16 @@ private enum PinnedOverlayCoordinateSpace {
     }
 
     static func appKitFrame(from captureFrame: CGRect) -> CGRect {
-        let desktopFrame = desktopFrame()
+        let screenFrame = screenContaining(cgFrame: captureFrame)?.frame
+            ?? desktopFrame()
 
-        guard !desktopFrame.isNull else {
+        guard !screenFrame.isNull else {
             return captureFrame
         }
 
         return CGRect(
             x: captureFrame.origin.x,
-            y: desktopFrame.maxY - captureFrame.origin.y - captureFrame.height,
+            y: screenFrame.maxY - captureFrame.origin.y - captureFrame.height,
             width: captureFrame.width,
             height: captureFrame.height
         )
