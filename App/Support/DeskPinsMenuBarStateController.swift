@@ -766,7 +766,7 @@ private extension DeskPinsMenuBarStateController {
         if let matched = nearestPinnedWindowID(
             in: titledCandidates,
             to: visibleReference.bounds,
-            maxScore: 320
+            maxScore: 120
         ) {
             return matched
         }
@@ -774,7 +774,7 @@ private extension DeskPinsMenuBarStateController {
         return nearestPinnedWindowID(
             in: sameProcessWindows,
             to: visibleReference.bounds,
-            maxScore: 320
+            maxScore: 120
         )
     }
 
@@ -864,7 +864,7 @@ private extension DeskPinsMenuBarStateController {
             return nil
         }
         if scoredWindows.count == 1 {
-            return best.score <= 320 ? best.id : nil
+            return best.score <= 120 ? best.id : nil
         }
 
         let runnerUp = scoredWindows[1]
@@ -899,7 +899,7 @@ private extension DeskPinsMenuBarStateController {
             return best.entry
         }
         if scoredEntries.count == 1 {
-            return best.score <= 320 ? best.entry : nil
+            return best.score <= 120 ? best.entry : nil
         }
 
         let runnerUp = scoredEntries[1]

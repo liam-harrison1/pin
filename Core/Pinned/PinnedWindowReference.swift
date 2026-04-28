@@ -38,6 +38,15 @@ public struct PinnedWindowReference: Sendable, Equatable, Codable {
         }
 
         if matchingWindowNumbers(with: other) {
+            // windowNumber can be recycled by the window server within a
+            // long-lived process; require approximate bounds as a sanity check.
+            if let bounds, let otherBounds = other.bounds {
+                let manhattan = abs(bounds.x - otherBounds.x)
+                    + abs(bounds.y - otherBounds.y)
+                    + abs(bounds.width - otherBounds.width)
+                    + abs(bounds.height - otherBounds.height)
+                if manhattan > 400 { return false }
+            }
             return true
         }
 
@@ -46,6 +55,7 @@ public struct PinnedWindowReference: Sendable, Equatable, Codable {
         let titleMatches = !normalizedTitle.isEmpty && normalizedTitle == normalizedOtherTitle
         let boundsMatch = Self.approximatelyMatches(bounds, other.bounds)
         let missingWindowNumber = windowNumber == nil || other.windowNumber == nil
+        let bothHaveBounds = bounds != nil && other.bounds != nil
         let hasUntitledSide = normalizedTitle.isEmpty || normalizedOtherTitle.isEmpty
 
         if titleMatches && boundsMatch {
@@ -53,6 +63,9 @@ public struct PinnedWindowReference: Sendable, Equatable, Codable {
         }
 
         if titleMatches && missingWindowNumber {
+            if bothHaveBounds && !boundsMatch {
+                return false
+            }
             return true
         }
 
