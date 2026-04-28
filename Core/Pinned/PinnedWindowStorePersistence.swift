@@ -67,15 +67,42 @@ public struct JSONPinnedWindowStorePersistence: PinnedWindowStorePersisting {
             return PinnedWindowStore()
         }
 
-        let data = try Data(contentsOf: fileURL)
-        let snapshot = try decoder.decode(PinnedWindowStoreSnapshot.self, from: data)
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            try? recoverCorruptedStore(error: error)
+            return PinnedWindowStore()
+        }
+
+        let snapshot: PinnedWindowStoreSnapshot
+        do {
+            snapshot = try decoder.decode(PinnedWindowStoreSnapshot.self, from: data)
+        } catch {
+            try? recoverCorruptedStore(error: error)
+            return PinnedWindowStore()
+        }
 
         guard snapshot.schemaVersion == PinnedWindowStoreSnapshot.currentSchemaVersion else {
-            throw PinnedWindowStorePersistenceError
-                .unsupportedSchemaVersion(snapshot.schemaVersion)
+            try? recoverCorruptedStore(
+                error: PinnedWindowStorePersistenceError
+                    .unsupportedSchemaVersion(snapshot.schemaVersion)
+            )
+            return PinnedWindowStore()
         }
 
         return PinnedWindowStore(windows: snapshot.windows)
+    }
+
+    private func recoverCorruptedStore(error: Error) throws {
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = dateFormatter.string(from: Date())
+        let backupURL = fileURL
+            .deletingPathExtension()
+            .appendingPathExtension("json.bak.\(timestamp)")
+
+        try fileManager.moveItem(at: fileURL, to: backupURL)
     }
 
     @discardableResult

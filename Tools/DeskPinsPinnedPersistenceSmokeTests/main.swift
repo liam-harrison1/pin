@@ -7,7 +7,7 @@ struct DeskPinsPinnedPersistenceSmokeTests {
         do {
             try testLoadingMissingStoreReturnsEmptyStore()
             try testSaveAndLoadRoundTripPreservesPinnedWindows()
-            try testUnsupportedSchemaVersionFailsGracefully()
+            try testUnsupportedSchemaVersionRecoversToEmptyStore()
             print("DeskPinsPinnedPersistence smoke tests passed")
         } catch {
             fputs("Pinned persistence smoke test failure: \(error)\n", stderr)
@@ -89,7 +89,7 @@ struct DeskPinsPinnedPersistenceSmokeTests {
         )
     }
 
-    private static func testUnsupportedSchemaVersionFailsGracefully() throws {
+    private static func testUnsupportedSchemaVersionRecoversToEmptyStore() throws {
         let tempRoot = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: tempRoot) }
 
@@ -106,17 +106,15 @@ struct DeskPinsPinnedPersistenceSmokeTests {
 
         let persistence = JSONPinnedWindowStorePersistence(fileURL: fileURL)
 
-        do {
-            _ = try persistence.loadStore()
-            throw SmokeTestFailure(
-                message: "loading an unsupported snapshot schema should fail"
-            )
-        } catch let error as PinnedWindowStorePersistenceError {
-            try expect(
-                error == .unsupportedSchemaVersion(99),
-                message: "persistence should report the unsupported schema version"
-            )
-        }
+        let loaded = try persistence.loadStore()
+        try expect(
+            loaded.isEmpty,
+            message: "loading a store with an unsupported schema version should recover with an empty store"
+        )
+        try expect(
+            !FileManager.default.fileExists(atPath: fileURL.path),
+            message: "the corrupted store file should be moved to a backup"
+        )
     }
 
     private static func makeTemporaryDirectory() throws -> URL {
